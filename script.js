@@ -2,24 +2,39 @@
  * 運動でモンスターを倒すダイエットゲーム（MVP）
  * 担当: Bさん（戦闘処理／セーブ選択UI／演出）
  *
- * 仕様書 STSTproject.md の「5. 最小版（MVP）の範囲」に対応：
- *   - 運動を1種類だけ記録できる（腕立て10回）
- *   - 記録するとモンスターに固定ダメージ（＝プレイヤーの攻撃力）が入る
- *   - HPバーが減り、0になったら「討伐！」と表示される
- *   - セーブスロットを選んでプレイヤーごとにデータを保存できる
+ * 対応Issue（github.com/ss-prg-sy/STSTproject）:
+ *   #2 セーブデータ共通処理（localStorage / version・slots構造）
+ *   #3 セーブスロット選択画面（新規作成・続きから・最終プレイ日時表示）
+ *   #4 運動記録→固定ダメージ→HPバー反映、履歴は直近50件まで
+ *   #5 討伐処理（HP0→討伐演出→討伐数+1→レベル再計算→次モンスター出現）
+ *   #6 運動メニューのランダム提案ボタン（第1段階：リストからランダム）
+ *
+ * 補足: #6の提案リストの中身はAさんがDESIGN.mdを元に用意する想定。
+ *       DESIGN.mdが未作成のため、ここでは仮リストを置いている。
  */
 
 (() => {
   "use strict";
 
-  const STORAGE_KEY = "dietGame_saves_v1";
+  const STORAGE_KEY = "dietGame_saves_v2";
+  const STORAGE_VERSION = 1;
   const SLOT_COUNT = 3;
   const EXERCISE_LABEL = "腕立て10回";
-  const BASE_ATTACK = 10;
-  const ATTACK_GROWTH_PER_LEVEL = 5;
+  const FIXED_DAMAGE = 20; // MVPでは固定ダメージで割り切る（Issue #4 補足）
+  const HISTORY_LIMIT = 50; // 直近50件、51件目で最古を削除（Issue #4）
   const BASE_MONSTER_HP = 100;
   const MONSTER_HP_GROWTH = 40;
   const MONSTER_NAMES = ["スライム", "ゴブリン", "ワイルドボア", "オーガ", "ドラゴン"];
+
+  // Issue #6: 仮の運動メニューリスト（Aさんが用意する正式リストに差し替え予定）
+  const MENU_SUGGESTIONS = [
+    "腕立て伏せ 10回",
+    "スクワット 15回",
+    "腹筋 15回",
+    "その場ジャンプ 30秒",
+    "プランク 30秒",
+    "階段の昇り降り 2分",
+  ];
 
   /** @typedef {{
    *   playerName: string,
@@ -30,39 +45,56 @@
    *   monsterHp: number,
    *   monsterMaxHp: number,
    *   monsterName: string,
+   *   lastPlayedAt: string,
    * }} SaveData
    */
 
-  // ---------- セーブデータ管理 ----------
+  // ---------- セーブデータ共通処理（Issue #2） ----------
+  // 構造: { version: number, slots: (SaveData|null)[] }
 
-  function loadAllSaves() {
+  function initStorage() {
+    return { version: STORAGE_VERSION, slots: Array(SLOT_COUNT).fill(null) };
+  }
+
+  function loadStorage() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return Array(SLOT_COUNT).fill(null);
+      if (!raw) return initStorage();
       const parsed = JSON.parse(raw);
-      const arr = Array(SLOT_COUNT).fill(null);
-      for (let i = 0; i < SLOT_COUNT; i++) arr[i] = parsed[i] || null;
-      return arr;
+      if (!parsed || !Array.isArray(parsed.slots)) return initStorage();
+      const slots = Array(SLOT_COUNT).fill(null);
+      for (let i = 0; i < SLOT_COUNT; i++) slots[i] = parsed.slots[i] || null;
+      return { version: parsed.version || STORAGE_VERSION, slots };
     } catch (e) {
       console.error("セーブデータの読み込みに失敗しました", e);
-      return Array(SLOT_COUNT).fill(null);
+      return initStorage();
     }
   }
 
-  function saveAllSaves(saves) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(saves));
+  function saveStorage() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(storage));
+  }
+
+  function getSlot(index) {
+    return storage.slots[index];
+  }
+
+  function setSlot(index, data) {
+    storage.slots[index] = data;
+    saveStorage();
   }
 
   function newSaveData(playerName) {
     return {
       playerName,
       level: 1,
-      attackPower: BASE_ATTACK,
+      attackPower: FIXED_DAMAGE,
       defeatCount: 0,
       history: [],
       monsterHp: BASE_MONSTER_HP,
       monsterMaxHp: BASE_MONSTER_HP,
       monsterName: MONSTER_NAMES[0],
+      lastPlayedAt: nowString(),
     };
   }
 
@@ -71,9 +103,15 @@
     return MONSTER_NAMES[idx];
   }
 
+  function nowString() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
   // ---------- アプリ状態 ----------
 
-  let saves = loadAllSaves();
+  let storage = loadStorage();
   let currentSlot = -1;
   let pendingNewSlot = -1;
 
@@ -85,18 +123,19 @@
     });
   }
 
-  // ---------- スロット選択画面 ----------
+  // ---------- スロット選択画面（Issue #3） ----------
 
   function renderSlots() {
     const list = document.getElementById("slot-list");
     list.innerHTML = "";
-    saves.forEach((save, i) => {
+    storage.slots.forEach((save, i) => {
       const card = document.createElement("div");
       if (save) {
         card.className = "slot-card";
         card.innerHTML = `
           <div class="slot-title">スロット${i + 1}：${escapeHtml(save.playerName)}</div>
           <div class="slot-sub">Lv.${save.level}　討伐数 ${save.defeatCount}　攻撃力 ${save.attackPower}</div>
+          <div class="slot-sub">最終プレイ：${escapeHtml(save.lastPlayedAt || "-")}</div>
         `;
         card.addEventListener("click", () => enterGame(i));
       } else {
@@ -124,8 +163,7 @@
   function confirmCreateSave() {
     const input = document.getElementById("new-player-name");
     const name = input.value.trim() || "プレイヤー";
-    saves[pendingNewSlot] = newSaveData(name);
-    saveAllSaves(saves);
+    setSlot(pendingNewSlot, newSaveData(name));
     enterGame(pendingNewSlot);
   }
 
@@ -133,12 +171,16 @@
 
   function enterGame(slotIndex) {
     currentSlot = slotIndex;
+    const save = getSlot(slotIndex);
+    save.lastPlayedAt = nowString();
+    saveStorage();
     showScreen("screen-game");
+    document.getElementById("menu-suggest-result").textContent = "";
     renderGame();
   }
 
   function currentSave() {
-    return saves[currentSlot];
+    return getSlot(currentSlot);
   }
 
   function renderGame() {
@@ -149,11 +191,11 @@
     document.getElementById("stat-attack").textContent = save.attackPower;
     document.getElementById("stat-defeat").textContent = save.defeatCount;
     document.getElementById("stat-records").textContent = save.history.length;
-    updateHpBar(save, false);
+    updateHpBar(save);
     renderHistory(save);
   }
 
-  function updateHpBar(save, animate) {
+  function updateHpBar(save) {
     const pct = Math.max(0, Math.min(100, (save.monsterHp / save.monsterMaxHp) * 100));
     const fill = document.getElementById("hp-bar-fill");
     fill.style.width = pct + "%";
@@ -175,7 +217,7 @@
     });
   }
 
-  // ---------- 戦闘処理（Bさん担当） ----------
+  // ---------- 戦闘処理（Issue #4, #5） ----------
 
   function recordExercise() {
     const save = currentSave();
@@ -184,23 +226,28 @@
     const btn = document.getElementById("btn-record");
     btn.disabled = true;
 
-    const damage = save.attackPower;
+    const damage = FIXED_DAMAGE;
     save.monsterHp = Math.max(0, save.monsterHp - damage);
     save.history.push({
-      date: formatDate(new Date()),
+      date: nowString(),
       label: EXERCISE_LABEL,
       damage,
     });
+    // Issue #4: 直近50件まで。51件目で最古を削除
+    while (save.history.length > HISTORY_LIMIT) {
+      save.history.shift();
+    }
+    save.lastPlayedAt = nowString();
 
     playHitAnimation(damage);
-    updateHpBar(save, true);
+    updateHpBar(save);
     renderHistory(save);
     document.getElementById("stat-records").textContent = save.history.length;
 
     if (save.monsterHp <= 0) {
       setTimeout(() => defeatMonster(save, btn), 550);
     } else {
-      saveAllSaves(saves);
+      saveStorage();
       setTimeout(() => (btn.disabled = false), 400);
     }
   }
@@ -224,14 +271,14 @@
     void banner.offsetWidth;
     banner.classList.add("show");
 
+    // Issue #5: 討伐数+1 → level = floor(討伐数/3)+1 で再計算 → 次モンスターHP満タン
     save.defeatCount += 1;
-    save.level += 1;
-    save.attackPower += ATTACK_GROWTH_PER_LEVEL;
+    save.level = Math.floor(save.defeatCount / 3) + 1;
     save.monsterMaxHp = BASE_MONSTER_HP + (save.level - 1) * MONSTER_HP_GROWTH;
     save.monsterHp = save.monsterMaxHp;
     save.monsterName = monsterNameForLevel(save.level);
 
-    saveAllSaves(saves);
+    saveStorage();
 
     setTimeout(() => {
       banner.classList.remove("show");
@@ -240,9 +287,11 @@
     }, 1400);
   }
 
-  function formatDate(d) {
-    const pad = (n) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  // ---------- 運動メニュー提案（Issue #6） ----------
+
+  function suggestMenu() {
+    const idx = Math.floor(Math.random() * MENU_SUGGESTIONS.length);
+    document.getElementById("menu-suggest-result").textContent = `→ ${MENU_SUGGESTIONS[idx]}`;
   }
 
   // ---------- イベント登録 ----------
@@ -259,6 +308,7 @@
     showScreen("screen-slots");
   });
   document.getElementById("btn-record").addEventListener("click", recordExercise);
+  document.getElementById("btn-suggest-menu").addEventListener("click", suggestMenu);
 
   // ---------- 起動 ----------
 
