@@ -200,6 +200,18 @@ h1, h2, h3 { text-align: center; margin: 0 0 12px; }
 }
 .stat-box span { font-size: 1.2em; color: var(--text); font-weight: bold; }
 
+.menu-suggest-area {
+  margin-top: 10px;
+  text-align: center;
+}
+.menu-suggest-area .btn-sub { width: 100%; }
+.menu-suggest-result {
+  margin-top: 8px;
+  min-height: 1.2em;
+  font-weight: bold;
+  color: var(--accent2);
+}
+
 .history-area { margin-top: 20px; }
 .history-list {
   list-style: none;
