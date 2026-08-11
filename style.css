@@ -1,0 +1,354 @@
+:root {
+  --bg: #1b1f2a;
+  --panel: #262c3b;
+  --accent: #ff6b6b;
+  --accent2: #4dd6a3;
+  --text: #f2f4f8;
+  --sub: #9aa3b5;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Hiragino Sans", "Segoe UI", sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.screen {
+  display: none;
+  width: 100%;
+  max-width: 480px;
+  background: var(--panel);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+}
+.screen.active { display: block; }
+
+h1, h2, h3 { text-align: center; margin: 0 0 12px; }
+.sub { text-align: center; color: var(--sub); margin-bottom: 20px; }
+
+/* --- スロット選択 --- */
+.slot-list { display: flex; flex-direction: column; gap: 12px; }
+.slot-card {
+  background: #1f2534;
+  border: 1px solid #333c52;
+  border-radius: 12px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: transform 0.15s, border-color 0.15s;
+}
+.slot-card:hover { transform: translateY(-2px); border-color: var(--accent2); }
+.slot-card .slot-title { font-weight: bold; margin-bottom: 4px; }
+.slot-card .slot-sub { color: var(--sub); font-size: 0.85em; }
+.slot-card.empty { text-align: center; color: var(--sub); border-style: dashed; }
+
+/* --- 新規プレイヤー画面 --- */
+#new-player-name {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #333c52;
+  background: #1f2534;
+  color: var(--text);
+  font-size: 1em;
+  margin-bottom: 16px;
+}
+.btn-row { display: flex; gap: 10px; }
+
+/* --- ボタン共通 --- */
+.btn {
+  border: none;
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-size: 1em;
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.1s;
+}
+.btn:active { transform: scale(0.97); }
+.btn-main { flex: 1; background: var(--accent2); color: #0e1420; font-weight: bold; }
+.btn-sub { flex: 1; background: #3a4258; color: var(--text); }
+.btn-small { background: #3a4258; color: var(--text); padding: 6px 10px; font-size: 0.8em; border-radius: 8px; }
+.btn-attack {
+  width: 100%;
+  background: var(--accent);
+  color: #fff;
+  font-weight: bold;
+  font-size: 1.05em;
+  padding: 16px;
+  margin-top: 16px;
+}
+.btn-attack:hover { filter: brightness(1.08); }
+
+/* --- ゲーム画面 --- */
+.game-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.player-info span { display: block; }
+#player-name { font-weight: bold; font-size: 1.1em; }
+#player-level { color: var(--sub); font-size: 0.85em; }
+
+.monster-area {
+  position: relative;
+  background: #1f2534;
+  border-radius: 12px;
+  padding: 20px;
+  text-align: center;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.monster-sprite {
+  width: 100%;
+  max-width: 340px;
+  margin: 0 auto 10px;
+  border-radius: 12px;
+  overflow: hidden;
+  transition: transform 0.15s;
+}
+.monster-sprite svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.monster-sprite.hit {
+  animation: shake 0.35s ease;
+}
+@keyframes shake {
+  0% { transform: translateX(0); filter: brightness(1); }
+  20% { transform: translateX(-10px); filter: brightness(2) saturate(3) hue-rotate(-20deg); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-6px); }
+  80% { transform: translateX(4px); }
+  100% { transform: translateX(0); filter: brightness(1); }
+}
+.monster-name { font-weight: bold; margin-bottom: 10px; }
+
+.hp-bar-wrap { margin: 0 auto; max-width: 320px; }
+.hp-bar-bg {
+  background: #0e1420;
+  border-radius: 8px;
+  height: 18px;
+  overflow: hidden;
+  border: 1px solid #333c52;
+}
+.hp-bar-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #ff8a4d, var(--accent));
+  transition: width 0.5s ease;
+}
+.hp-text { margin-top: 6px; font-size: 0.85em; color: var(--sub); }
+
+.damage-popup {
+  position: absolute;
+  top: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 1.6em;
+  font-weight: bold;
+  color: #ffd23f;
+  opacity: 0;
+  pointer-events: none;
+}
+.damage-popup.show {
+  animation: popup 0.7s ease forwards;
+}
+@keyframes popup {
+  0% { opacity: 0; transform: translate(-50%, 0); }
+  20% { opacity: 1; transform: translate(-50%, -10px); }
+  100% { opacity: 0; transform: translate(-50%, -40px); }
+}
+
+.defeat-banner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2em;
+  font-weight: bold;
+  color: #ffd23f;
+  background: rgba(14,20,32,0.7);
+  opacity: 0;
+  pointer-events: none;
+}
+.defeat-banner.show {
+  animation: defeat 1.4s ease forwards;
+}
+.defeat-banner {
+  flex-direction: column;
+  line-height: 1.2;
+}
+@keyframes defeat {
+  0% { opacity: 0; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.stats-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.stat-box {
+  flex: 1;
+  background: #1f2534;
+  border-radius: 10px;
+  padding: 10px;
+  text-align: center;
+  font-size: 0.8em;
+  color: var(--sub);
+}
+.stat-box span { font-size: 1.2em; color: var(--text); font-weight: bold; }
+
+/* --- 運動選択・量入力 --- */
+.exercise-input {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+.exercise-select {
+  flex: 2;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #333c52;
+  background: #1f2534;
+  color: var(--text);
+  font-size: 1em;
+}
+.amount-row {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.exercise-amount {
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #333c52;
+  background: #1f2534;
+  color: var(--text);
+  font-size: 1em;
+  text-align: right;
+}
+.exercise-unit {
+  color: var(--sub);
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+.menu-suggest-area {
+  margin-top: 10px;
+  text-align: center;
+}
+.menu-suggest-area .btn-sub { width: 100%; }
+.menu-suggest-result {
+  margin-top: 8px;
+  min-height: 1.2em;
+  font-weight: bold;
+  color: var(--accent2);
+}
+
+.history-area { margin-top: 20px; }
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 140px;
+  overflow-y: auto;
+  font-size: 0.85em;
+}
+.history-list li {
+  padding: 8px 4px;
+  border-bottom: 1px solid #333c52;
+}
+.hist-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.hist-label {
+  color: var(--text);
+  font-weight: bold;
+  font-size: 1.05em;
+}
+.hist-damage {
+  color: var(--accent);
+  font-weight: bold;
+  font-size: 1.05em;
+  white-space: nowrap;
+  margin-left: 8px;
+}
+.hist-date {
+  color: var(--sub);
+  font-size: 0.75em;
+  margin-top: 2px;
+}
+.history-empty { text-align: center; color: var(--sub); padding: 10px 0; }
+
+/* --- もちもの（第3段階） --- */
+.sub-actions {
+  margin-top: 10px;
+  text-align: center;
+}
+.sub-actions .btn-small {
+  width: 100%;
+  padding: 10px;
+  font-size: 0.9em;
+}
+.items-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.item-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #1f2534;
+  border: 1px solid #333c52;
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+}
+.item-name { color: var(--text); font-weight: bold; }
+.item-count { color: var(--accent2); font-weight: bold; }
+.items-empty { text-align: center; color: var(--sub); padding: 24px 0; line-height: 1.6; }
+.defeat-drop {
+  display: block;
+  font-size: 0.5em;
+  color: var(--accent2);
+  margin-top: 8px;
+}
+
+/* --- そうび強化（第3段階） --- */
+.equip-list { display: flex; flex-direction: column; gap: 10px; }
+.equip-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  background: #1f2534;
+  border: 1px solid #333c52;
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.equip-info { flex: 1; }
+.equip-name { color: var(--text); font-weight: bold; }
+.equip-lv { color: var(--accent2); font-size: 0.85em; margin-left: 4px; }
+.equip-effect { color: var(--accent); font-size: 0.85em; margin-top: 3px; }
+.equip-cost { color: var(--sub); font-size: 0.78em; margin-top: 3px; }
+.equip-btn { white-space: nowrap; }
+.equip-btn:disabled { opacity: 0.4; cursor: not-allowed; }
