@@ -16,7 +16,8 @@
 (() => {
   "use strict";
 
-  const STORAGE_KEY = "dietGame_saves_v2";
+  const STORAGE_KEY_BASE = "dietGame_saves_v2";
+  const DEVICE_ID_KEY = "dietGame_deviceId";
   const STORAGE_VERSION = 1;
   const SLOT_COUNT = 3;
   const HISTORY_LIMIT = 50; // 直近50件、51件目で最古を削除（Issue #4）
@@ -233,20 +234,72 @@
 
   // ---------- セーブデータ共通処理（Issue #2） ----------
   // 構造: { version: number, slots: (SaveData|null)[] }
+  //
+  // 端末ごとにセーブを分離する:
+  //   このブラウザ（端末）固有のID（dietGame_deviceId）を初回アクセス時に発行して
+  //   localStorageに保存し、それをセーブデータのキーに含める
+  //   （dietGame_saves_v2::<deviceId>）。
+  //   これにより、同じ index.html / 同じ配信元を複数の端末から開いても、
+  //   各端末は自分だけのセーブスロット一式を持つ。
+
+  function generateId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return window.crypto.randomUUID();
+    }
+    // 古いブラウザ向けの簡易フォールバック
+    return `dev-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function getDeviceId() {
+    try {
+      let id = localStorage.getItem(DEVICE_ID_KEY);
+      if (!id) {
+        id = generateId();
+        localStorage.setItem(DEVICE_ID_KEY, id);
+      }
+      return id;
+    } catch (e) {
+      console.error("端末IDの発行に失敗しました", e);
+      return "unknown-device";
+    }
+  }
+
+  function getStorageKey() {
+    return `${STORAGE_KEY_BASE}::${getDeviceId()}`;
+  }
 
   function initStorage() {
     return { version: STORAGE_VERSION, slots: Array(SLOT_COUNT).fill(null) };
   }
 
+  function normalizeStorage(parsed) {
+    if (!parsed || !Array.isArray(parsed.slots)) return null;
+    const slots = Array(SLOT_COUNT).fill(null);
+    for (let i = 0; i < SLOT_COUNT; i++) slots[i] = parsed.slots[i] || null;
+    return { version: parsed.version || STORAGE_VERSION, slots };
+  }
+
   function loadStorage() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return initStorage();
-      const parsed = JSON.parse(raw);
-      if (!parsed || !Array.isArray(parsed.slots)) return initStorage();
-      const slots = Array(SLOT_COUNT).fill(null);
-      for (let i = 0; i < SLOT_COUNT; i++) slots[i] = parsed.slots[i] || null;
-      return { version: parsed.version || STORAGE_VERSION, slots };
+      const raw = localStorage.getItem(getStorageKey());
+      if (raw) {
+        const normalized = normalizeStorage(JSON.parse(raw));
+        if (normalized) return normalized;
+      } else {
+        // 旧バージョン（端末IDなしの共通キー）からの引き継ぎ。
+        // この端末にまだ専用のセーブが無く、旧キーにデータが残っている場合のみ
+        // 1回だけ引き継ぐ（他端末には影響しない）。
+        const legacyRaw = localStorage.getItem(STORAGE_KEY_BASE);
+        if (legacyRaw) {
+          const migrated = normalizeStorage(JSON.parse(legacyRaw));
+          if (migrated) {
+            localStorage.setItem(getStorageKey(), JSON.stringify(migrated));
+            localStorage.removeItem(STORAGE_KEY_BASE);
+            return migrated;
+          }
+        }
+      }
+      return initStorage();
     } catch (e) {
       console.error("セーブデータの読み込みに失敗しました", e);
       return initStorage();
@@ -254,7 +307,7 @@
   }
 
   function saveStorage() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(storage));
+    localStorage.setItem(getStorageKey(), JSON.stringify(storage));
   }
 
   function getSlot(index) {
