@@ -316,7 +316,7 @@
     const weights = [
       3,                         // モチグマ
       4,                         // ドカプリン
-      t > 15 ? 2.5 : 0,          // ネボスケ竜
+      t > 15 ? 1.6 : 0,          // ネボスケ竜
       t > 6 ? 3 : 0,             // オニギリガニ
     ];
     let r = Math.random() * weights.reduce((a, b) => a + b, 0);
@@ -330,7 +330,7 @@
     monsters.push({
       type, typeIndex, z: 0, xn, baseXn: xn, hp: type.hp,
       t: Math.random() * 10, gold: !demo && elapsed > 8 && Math.random() < 0.05,
-      napping: false, napT: 0.8 + Math.random() * 0.8,
+      napping: false, napT: 1.6 + Math.random() * 1.4,
       flashT: 0, kb: 0, dying: 0, demo: !!demo,
     });
   }
@@ -604,7 +604,8 @@
           break;
         case "nap":
           m.napT -= dt;
-          if (m.napT <= 0) { m.napping = !m.napping; m.napT = m.napping ? 1.5 : 0.8 + Math.random() * 0.7; }
+          // 寝る時間は短め（0.8秒）、起きて歩く時間は長め（2.2〜3.5秒）
+          if (m.napT <= 0) { m.napping = !m.napping; m.napT = m.napping ? 0.8 : 2.2 + Math.random() * 1.3; }
           if (m.napping) speed = 0;
           break;
       }
