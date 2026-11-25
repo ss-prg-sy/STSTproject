@@ -1,664 +1,825 @@
 /*
- * 運動でモンスターを倒すダイエットゲーム（MVP）
- * 担当: Bさん（戦闘処理／セーブ選択UI／演出）
+ * おしよせ！かいぶつ
+ * 草原のむこうから押しよせる怪物を、タップで追いかえすゲーム。
+ * 怪物が柵まで来るとライフが減り、ライフが0になったらゲームオーバー。
  *
- * 対応Issue（github.com/ss-prg-sy/STSTproject）:
- *   #2 セーブデータ共通処理（localStorage / version・slots構造）
- *   #3 セーブスロット選択画面（新規作成・続きから・最終プレイ日時表示）
- *   #4 運動記録→固定ダメージ→HPバー反映、履歴は直近50件まで
- *   #5 討伐処理（HP0→討伐演出→討伐数+1→レベル再計算→次モンスター出現）
- *   #6 運動メニューのランダム提案ボタン（第1段階：リストからランダム）
- *
- * 補足: #6の提案リストの中身はAさんがDESIGN.mdを元に用意する想定。
- *       DESIGN.mdが未作成のため、ここでは仮リストを置いている。
+ * ファイル構成
+ *   art.js    … 怪物の絵（SVG）
+ *   script.js … ゲームの動き（このファイル）
+ *   style.css … 画面のデザイン
  */
-
 (() => {
   "use strict";
 
-  const STORAGE_KEY_BASE = "dietGame_saves_v2";
-  const DEVICE_ID_KEY = "dietGame_deviceId";
-  const STORAGE_VERSION = 1;
-  const SLOT_COUNT = 3;
-  const HISTORY_LIMIT = 50; // 直近50件、51件目で最古を削除（Issue #4）
-  const BASE_MONSTER_HP = 100;
-  const MONSTER_HP_GROWTH = 40;
+  const { MONSTER_DEFS, MONSTERS } = window.ART;
 
-  // ---------- 怪物データ（第3段階：薄暗い森・恐め獣寄り） ----------
-  // 各怪物は名前・落とすおとしもの(drop)・体パーツ(parts)を持つ。
-  // 表示は「共通defs ＋ 森背景 ＋ parts」を組み立てて1枚のSVGにする。
+  /* =========================================================
+   * 調整しやすい設定
+   * ========================================================= */
+  const LIVES = 3;                  // ライフの数
+  const COMBO_TIME = 2.2;           // この秒数たたかないとコンボが切れる
+  const FEVER_COMBO = 20;           // このコンボ数でフィーバー
+  const FEVER_TIME = 7;             // フィーバーの秒数
+  const LEVEL_SECONDS = 25;         // この秒数ごとにレベルアップ（速くなる）
+  const AMMO_MAX = 10;              // 玉の最大数
+  const RELOAD_SEC = 0.45;          // 玉が1発もどるまでの秒数
+  const BEST_KEY = "stst_oshiyose_best_v1";
+  const SOUND_KEY = "stst_oshiyose_sound_v1";
 
-  const MONSTER_DEFS = `
-    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#5a5b9e"/><stop offset="40%" stop-color="#c66b7a"/><stop offset="70%" stop-color="#ff9d5c"/><stop offset="100%" stop-color="#ffd08a"/></linearGradient>
-    <linearGradient id="grass" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7a8a4a"/><stop offset="100%" stop-color="#4e5c30"/></linearGradient>
-    <linearGradient id="hill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#9c7a6a"/><stop offset="100%" stop-color="#6e5548"/></linearGradient>
-    <radialGradient id="sun" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#fff2c0" stop-opacity="1"/><stop offset="60%" stop-color="#ffbf6a" stop-opacity="0.6"/><stop offset="100%" stop-color="#ffbf6a" stop-opacity="0"/></radialGradient>
-    <radialGradient id="eyeglow" cx="50%" cy="50%" r="55%"><stop offset="0%" stop-color="#fff6c9"/><stop offset="35%" stop-color="#ffd24d"/><stop offset="75%" stop-color="#e8891f"/><stop offset="100%" stop-color="#7a3d0c"/></radialGradient>
-    <radialGradient id="eyehalo" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#ffcf5a" stop-opacity="0.85"/><stop offset="100%" stop-color="#ffcf5a" stop-opacity="0"/></radialGradient>
-    <radialGradient id="redglow" cx="50%" cy="50%" r="55%"><stop offset="0%" stop-color="#ffe0d0"/><stop offset="40%" stop-color="#ff6b5a"/><stop offset="100%" stop-color="#7a1a10"/></radialGradient>
-    <radialGradient id="redhalo" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#ff6b5a" stop-opacity="0.85"/><stop offset="100%" stop-color="#ff6b5a" stop-opacity="0"/></radialGradient>
-    <radialGradient id="mBody" cx="42%" cy="22%" r="86%"><stop offset="0%" stop-color="#faf6ee"/><stop offset="50%" stop-color="#ddd4c2"/><stop offset="100%" stop-color="#8c8474"/></radialGradient>
-    <radialGradient id="mMuz" cx="50%" cy="30%" r="72%"><stop offset="0%" stop-color="#f7f2e8"/><stop offset="100%" stop-color="#b5ac9c"/></radialGradient>
-    <radialGradient id="pBody" cx="42%" cy="24%" r="86%"><stop offset="0%" stop-color="#f5d97e"/><stop offset="50%" stop-color="#cea24a"/><stop offset="100%" stop-color="#7a5a28"/></radialGradient>
-    <radialGradient id="pTop" cx="45%" cy="30%" r="75%"><stop offset="0%" stop-color="#8a5a34"/><stop offset="100%" stop-color="#4c301b"/></radialGradient>
-    <radialGradient id="dBody" cx="42%" cy="22%" r="88%"><stop offset="0%" stop-color="#a6dcb0"/><stop offset="50%" stop-color="#5fa06c"/><stop offset="100%" stop-color="#2c5238"/></radialGradient>
-    <radialGradient id="dBelly" cx="50%" cy="35%" r="70%"><stop offset="0%" stop-color="#dcefc0"/><stop offset="100%" stop-color="#8fb877"/></radialGradient>
-    <radialGradient id="oBody" cx="45%" cy="24%" r="84%"><stop offset="0%" stop-color="#faf5ec"/><stop offset="55%" stop-color="#ddd5c2"/><stop offset="100%" stop-color="#9c9482"/></radialGradient>
-    <radialGradient id="oShell" cx="50%" cy="40%" r="70%"><stop offset="0%" stop-color="#ef6a5a"/><stop offset="100%" stop-color="#8e2820"/></radialGradient>
-    <filter id="blur1"><feGaussianBlur stdDeviation="3"/></filter>
-    <filter id="blur2"><feGaussianBlur stdDeviation="6"/></filter>
-    <filter id="softsh" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur in="SourceAlpha" stdDeviation="3"/><feOffset dy="4"/><feComponentTransfer><feFuncA type="linear" slope="0.4"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-    <filter id="fur" x="-20%" y="-20%" width="140%" height="140%"><feTurbulence type="fractalNoise" baseFrequency="0.9 0.4" numOctaves="2" seed="7" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="6" xChannelSelector="R" yChannelSelector="G"/></filter>
-    <filter id="furedge" x="-30%" y="-30%" width="160%" height="160%"><feTurbulence type="fractalNoise" baseFrequency="0.85 0.5" numOctaves="2" seed="3" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="9" xChannelSelector="R" yChannelSelector="G"/></filter>
-    <filter id="scale" x="-20%" y="-20%" width="140%" height="140%"><feTurbulence type="turbulence" baseFrequency="0.15 0.15" numOctaves="2" seed="5" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="4"/></filter>
-  `;
-
-  const FOREST_BG = `
-    <rect width="300" height="270" fill="url(#sky)"/>
-    <circle cx="150" cy="130" r="78" fill="url(#sun)"/>
-    <circle cx="150" cy="130" r="28" fill="#fff0b8" opacity="0.9"/>
-    <g fill="#e88a6a" opacity="0.45"><ellipse cx="66" cy="52" rx="30" ry="9"/><ellipse cx="228" cy="42" rx="26" ry="8"/></g>
-    <path d="M0 170 Q80 132 160 164 Q230 188 300 162 L300 270 L0 270 Z" fill="url(#hill)"/>
-    <path d="M0 200 Q150 182 300 204 L300 270 L0 270 Z" fill="url(#grass)"/>
-    <g stroke="#3d491f" stroke-width="2" stroke-linecap="round">
-      <path d="M34 232 l-3 -11"/><path d="M39 232 l2 -13"/><path d="M64 236 l-2 -10"/><path d="M244 232 l2 -12"/><path d="M266 235 l-2 -10"/><path d="M270 235 l3 -13"/>
-    </g>
-    <ellipse cx="150" cy="238" rx="66" ry="12" fill="#2a3016" opacity="0.4" filter="url(#blur1)"/>
-  `;
-
-  const MONSTERS = [
-    {
-      name: "モチグマ",
-      drop: "のびもち",
-      parts: `<g transform="translate(150,150)">
-        <ellipse cx="-40" cy="62" rx="21" ry="17" fill="url(#mBody)" filter="url(#softsh)"/><ellipse cx="40" cy="62" rx="21" ry="17" fill="url(#mBody)" filter="url(#softsh)"/>
-        <g filter="url(#furedge)"><path d="M0 -2 C-40 -2 -52 22 -49 47 C-46 72 -24 80 0 80 C24 80 46 72 49 47 C52 22 40 -2 0 -2 Z" fill="url(#mBody)"/></g>
-        <ellipse cx="-35" cy="46" rx="14" ry="26" fill="url(#mBody)" filter="url(#softsh)" transform="rotate(10 -35 46)"/><ellipse cx="35" cy="46" rx="14" ry="26" fill="url(#mBody)" filter="url(#softsh)" transform="rotate(-10 35 46)"/>
-        <g fill="#221e1a"><path d="M-44 70 l-3 7 l4 -2 Z"/><path d="M-38 72 l-2 7 l4 -2 Z"/><path d="M44 70 l3 7 l-4 -2 Z"/><path d="M38 72 l2 7 l-4 -2 Z"/></g>
-        <path d="M-26 -42 Q-36 -60 -18 -52 Z" fill="url(#mBody)" filter="url(#softsh)"/><path d="M26 -42 Q36 -60 18 -52 Z" fill="url(#mBody)" filter="url(#softsh)"/>
-        <g filter="url(#furedge)"><path d="M0 -54 C-28 -54 -35 -30 -33 -10 C-31 12 -16 24 0 24 C16 24 31 12 33 -10 C35 -30 28 -54 0 -54 Z" fill="url(#mBody)"/></g>
-        <ellipse cx="-14" cy="-18" rx="10" ry="8" fill="#39342d" opacity="0.6"/><ellipse cx="14" cy="-18" rx="10" ry="8" fill="#39342d" opacity="0.6"/>
-        <circle cx="-14" cy="-18" r="10" fill="url(#eyehalo)"/><circle cx="14" cy="-18" r="10" fill="url(#eyehalo)"/><circle cx="-14" cy="-18" r="5.2" fill="url(#eyeglow)"/><circle cx="14" cy="-18" r="5.2" fill="url(#eyeglow)"/>
-        <ellipse cx="-14" cy="-18" rx="1.4" ry="4.4" fill="#180d03"/><ellipse cx="14" cy="-18" rx="1.4" ry="4.4" fill="#180d03"/>
-        <ellipse cx="0" cy="4" rx="15" ry="12" fill="url(#mMuz)" filter="url(#softsh)"/><ellipse cx="0" cy="-2" rx="5.5" ry="4" fill="#241f1a"/>
-        <path d="M-10 10 Q0 17 10 10" fill="none" stroke="#241f1a" stroke-width="2.4" stroke-linecap="round"/><path d="M-5 12 l-2 7 l4 -3 Z" fill="#f3efe6"/><path d="M5 12 l2 7 l-4 -3 Z" fill="#f3efe6"/>
-      </g>`,
-    },
-    {
-      name: "ドカプリン",
-      drop: "ぷるゼリー",
-      parts: `<g transform="translate(150,150)">
-        <ellipse cx="-42" cy="66" rx="20" ry="15" fill="url(#pBody)" filter="url(#softsh)"/><ellipse cx="42" cy="66" rx="20" ry="15" fill="url(#pBody)" filter="url(#softsh)"/>
-        <path d="M-52 6 L52 6 L44 70 Q0 84 -44 70 Z" fill="url(#pBody)" filter="url(#softsh)"/>
-        <path d="M-52 8 Q-40 -8 -30 6 Q-16 -14 0 4 Q16 -14 30 6 Q40 -8 52 8 Q40 22 0 20 Q-40 22 -52 8 Z" fill="url(#pTop)" filter="url(#softsh)"/>
-        <path d="M-30 6 l-3 12 M0 4 l0 14 M30 6 l3 12" stroke="#2a1a0e" stroke-width="3" stroke-linecap="round"/>
-        <ellipse cx="-16" cy="30" rx="9" ry="8" fill="#2a1608" opacity="0.6"/><ellipse cx="16" cy="30" rx="9" ry="8" fill="#2a1608" opacity="0.6"/>
-        <circle cx="-16" cy="30" r="10" fill="url(#redhalo)"/><circle cx="16" cy="30" r="10" fill="url(#redhalo)"/><circle cx="-16" cy="30" r="5" fill="url(#redglow)"/><circle cx="16" cy="30" r="5" fill="url(#redglow)"/>
-        <ellipse cx="-16" cy="30" rx="1.4" ry="4" fill="#1a0603"/><ellipse cx="16" cy="30" rx="1.4" ry="4" fill="#1a0603"/>
-        <path d="M-14 48 Q0 58 14 48" fill="none" stroke="#2a1a0e" stroke-width="2.5" stroke-linecap="round"/><path d="M-8 50 l-2 8 l4 -3 Z" fill="#f3efe6"/><path d="M8 50 l2 8 l-4 -3 Z" fill="#f3efe6"/><path d="M0 51 l-2 6 l4 0 Z" fill="#f3efe6"/>
-      </g>`,
-    },
-    {
-      name: "ネボスケ竜",
-      drop: "ねぼけうろこ",
-      parts: `<g transform="translate(150,150)">
-        <ellipse cx="-46" cy="60" rx="20" ry="14" fill="url(#dBody)" filter="url(#softsh)"/><ellipse cx="46" cy="60" rx="20" ry="14" fill="url(#dBody)" filter="url(#softsh)"/>
-        <g filter="url(#scale)"><path d="M-6 8 C-52 6 -64 30 -58 50 C-52 70 -24 76 4 74 C40 72 58 56 56 38 C54 20 34 10 -6 8 Z" fill="url(#dBody)"/></g>
-        <ellipse cx="6" cy="52" rx="26" ry="20" fill="url(#dBelly)" opacity="0.85"/>
-        <g fill="#2f5a3c"><path d="M-34 6 l-8 -16 l14 8 Z"/><path d="M-14 2 l-6 -18 l14 10 Z"/><path d="M8 2 l-4 -18 l14 12 Z"/></g>
-        <g filter="url(#scale)"><ellipse cx="30" cy="24" rx="26" ry="21" fill="url(#dBody)" filter="url(#softsh)"/></g>
-        <path d="M44 24 Q64 22 62 34 Q58 42 44 38 Z" fill="url(#dBody)"/><ellipse cx="60" cy="30" rx="2.5" ry="2" fill="#1e2f22"/>
-        <path d="M20 6 Q14 -8 26 -4 Z" fill="#dfe6c8"/><path d="M38 6 Q34 -10 46 -2 Z" fill="#dfe6c8"/>
-        <ellipse cx="26" cy="22" rx="8" ry="7" fill="#1e3327" opacity="0.6"/><circle cx="26" cy="22" r="9" fill="url(#eyehalo)"/><circle cx="26" cy="22" r="4.6" fill="url(#eyeglow)"/><ellipse cx="26" cy="22" rx="1.3" ry="4" fill="#140d02"/>
-        <path d="M48 38 l-1 7 l4 -4 Z" fill="#f3efe6"/><path d="M40 40 l-1 6 l3 -3 Z" fill="#f3efe6"/>
-      </g>`,
-    },
-    {
-      name: "オニギリガニ",
-      drop: "こめつぶ",
-      parts: `<g transform="translate(150,150)">
-        <g stroke="#7e2018" stroke-width="5" stroke-linecap="round" fill="none"><path d="M-30 60 Q-46 66 -52 78"/><path d="M-24 66 Q-38 74 -42 86"/><path d="M30 60 Q46 66 52 78"/><path d="M24 66 Q38 74 42 86"/></g>
-        <path d="M-44 40 Q-64 34 -60 20 Q-52 12 -46 24 Q-40 16 -36 28 Z" fill="url(#oShell)" filter="url(#softsh)"/><path d="M44 40 Q64 34 60 20 Q52 12 46 24 Q40 16 36 28 Z" fill="url(#oShell)" filter="url(#softsh)"/>
-        <path d="M-40 44 Q-30 30 -18 40 Z" fill="url(#oShell)" opacity="0.9"/><path d="M40 44 Q30 30 18 40 Z" fill="url(#oShell)" opacity="0.9"/>
-        <path d="M0 -40 Q-34 -34 -40 48 Q0 60 40 48 Q34 -34 0 -40 Z" fill="url(#oBody)" filter="url(#softsh)"/>
-        <path d="M-30 20 L30 20 L24 52 Q0 60 -24 52 Z" fill="#22301f"/>
-        <ellipse cx="-14" cy="2" rx="9" ry="8" fill="#34302a" opacity="0.5"/><ellipse cx="14" cy="2" rx="9" ry="8" fill="#34302a" opacity="0.5"/>
-        <circle cx="-14" cy="2" r="9" fill="url(#eyehalo)"/><circle cx="14" cy="2" r="9" fill="url(#eyehalo)"/><circle cx="-14" cy="2" r="4.6" fill="url(#eyeglow)"/><circle cx="14" cy="2" r="4.6" fill="url(#eyeglow)"/>
-        <ellipse cx="-14" cy="2" rx="1.3" ry="3.8" fill="#140d02"/><ellipse cx="14" cy="2" rx="1.3" ry="3.8" fill="#140d02"/>
-        <path d="M-10 30 Q0 38 10 30" fill="none" stroke="#141a12" stroke-width="2.4" stroke-linecap="round"/><path d="M-5 32 l-2 7 l4 -3 Z" fill="#f3efe6"/><path d="M5 32 l2 7 l-4 -3 Z" fill="#f3efe6"/>
-      </g>`,
-    },
+  // 怪物の種類（art は art.js の MONSTERS の何番目の絵か）
+  const TYPES = [
+    { art: 0, hp: 2, speed: 0.075, points: 20, size: 1.0,  move: "bounce", tip: "2回たたく" },
+    { art: 1, hp: 1, speed: 0.125, points: 10, size: 0.86, move: "wobble", tip: "足がはやい" },
+    { art: 2, hp: 3, speed: 0.17,  points: 30, size: 1.06, move: "nap",    tip: "寝てる時は一撃！" },
+    { art: 3, hp: 1, speed: 0.09,  points: 15, size: 0.86, move: "zigzag", tip: "横にうろうろ" },
   ];
 
-  // SVG文字列内の id 定義と url(#...) 参照に一意のプレフィックスを付ける。
-  // これで同じページに複数のSVGがあっても id が衝突しない（PC/スマホ差の原因を解消）。
-  let svgIdCounter = 0;
-  function namespaceSvgIds(svg) {
-    const prefix = `s${svgIdCounter++}_`;
-    // MONSTER_DEFS で定義している id 名の一覧
-    const ids = [
-      "sky", "grass", "hill", "sun", "eyeglow", "eyehalo", "redglow", "redhalo",
-      "mBody", "mMuz", "pBody", "pTop", "dBody", "dBelly", "oBody", "oShell",
-      "blur1", "blur2", "softsh", "fur", "furedge", "scale",
-    ];
-    let out = svg;
-    ids.forEach((id) => {
-      // id="xxx" の定義側
-      out = out.split(`id="${id}"`).join(`id="${prefix}${id}"`);
-      // url(#xxx) の参照側
-      out = out.split(`url(#${id})`).join(`url(#${prefix}${id})`);
+  // 点数ごとの称号
+  const RANKS = [
+    [0,    "見習いの見張り番"],
+    [300,  "村の見張り番"],
+    [800,  "草原の守り手"],
+    [1600, "かいぶつハンター"],
+    [3000, "伝説の門番"],
+    [5000, "怪物たちの天敵"],
+  ];
+
+  /* =========================================================
+   * 画面の部品
+   * ========================================================= */
+  const $ = (id) => document.getElementById(id);
+  const stage = $("stage");
+  const cv = $("game");
+  const ctx = cv.getContext("2d");
+  const ui = {
+    hud: $("hud"), score: $("score"), hudBest: $("hud-best"), lives: $("lives"),
+    combo: $("combo"), banner: $("banner"), ammo: $("ammo"),
+    start: $("start"), startBest: $("start-best"), howto: $("howto"), sound: $("btn-sound"),
+    pause: $("pause"), over: $("over"),
+    final: $("final"), record: $("record"), rank: $("rank"),
+    stKills: $("st-kills"), stCombo: $("st-combo"), stBest: $("st-best"),
+  };
+
+  /* =========================================================
+   * 保存（ベストスコアと音のON/OFFだけ）
+   * ========================================================= */
+  function load(key, fallback) {
+    try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); }
+    catch (e) { return fallback; }
+  }
+  function save(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+  }
+  let best = load(BEST_KEY, 0);
+  let soundOn = load(SOUND_KEY, true);
+
+  /* =========================================================
+   * 音（ファイルを使わず、その場で鳴らす）
+   * ========================================================= */
+  let actx = null;
+  function unlockAudio() {
+    if (actx) { if (actx.state === "suspended") actx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) actx = new AC();
+  }
+  function tone(freq, dur, type = "square", vol = 0.08, slide = 1, delay = 0) {
+    if (!soundOn || !actx) return;
+    const t = actx.currentTime + delay;
+    const o = actx.createOscillator();
+    const g = actx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t);
+    if (slide !== 1) o.frequency.exponentialRampToValueAtTime(Math.max(40, freq * slide), t + dur);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g).connect(actx.destination);
+    o.start(t);
+    o.stop(t + dur + 0.02);
+  }
+  const sfx = {
+    hit:   (c) => tone(420 + Math.min(c, 40) * 22, 0.07, "triangle", 0.14, 1.4),
+    kill:  (c) => { const f = 620 + Math.min(c, 40) * 26; tone(f, 0.09, "square", 0.05, 1.5); tone(f * 1.5, 0.12, "triangle", 0.08, 1.2, 0.05); },
+    miss:  () => tone(170, 0.09, "sine", 0.12, 0.6),
+    empty: () => tone(90, 0.05, "square", 0.06, 1),
+    hurt:  () => { tone(240, 0.35, "sawtooth", 0.07, 0.35); tone(120, 0.4, "square", 0.05, 0.5, 0.05); },
+    star:  () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.12, "triangle", 0.09, 1, i * 0.06)),
+    fever: () => [659, 784, 988, 1319, 988, 1319].forEach((f, i) => tone(f, 0.1, "square", 0.05, 1, i * 0.07)),
+    level: () => [392, 523, 659].forEach((f, i) => tone(f, 0.12, "triangle", 0.08, 1, i * 0.08)),
+    life:  () => [784, 1047].forEach((f, i) => tone(f, 0.14, "sine", 0.12, 1, i * 0.08)),
+    over:  () => [523, 440, 349, 262].forEach((f, i) => tone(f, 0.22, "triangle", 0.1, 0.97, i * 0.16)),
+  };
+
+  /* =========================================================
+   * 怪物の絵を、ゲームで使う画像に変換しておく
+   * ========================================================= */
+  const SPRITE_H = 220; // 画像の高さ（ピクセル）
+  const sprites = [];
+
+  function measureParts(parts) {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("width", "300");
+    svg.setAttribute("height", "300");
+    svg.style.cssText = "position:absolute;left:-9999px;top:0;visibility:hidden";
+    svg.innerHTML = `<defs>${MONSTER_DEFS}</defs><g>${parts}</g>`;
+    document.body.appendChild(svg);
+    const box = svg.lastElementChild.getBBox();
+    svg.remove();
+    return box;
+  }
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
     });
-    return out;
   }
-
-  // 森背景つきの1枚SVGを組み立てる
-  function buildMonsterSvg(monster) {
-    return namespaceSvgIds(
-      `<svg viewBox="0 0 300 270" xmlns="http://www.w3.org/2000/svg"><defs>${MONSTER_DEFS}</defs>${FOREST_BG}${monster.parts}</svg>`
-    );
+  function tinted(source, color) {
+    const c = document.createElement("canvas");
+    c.width = source.width; c.height = source.height;
+    const g = c.getContext("2d");
+    g.drawImage(source, 0, 0);
+    g.globalCompositeOperation = "source-atop";
+    g.fillStyle = color;
+    g.fillRect(0, 0, c.width, c.height);
+    return c;
   }
-
-  // スタート画面用：夕暮れの草原に4体が並ぶにぎやかなビジュアル
-  function buildStartVisual() {
-    // 各怪物を縮小して横に並べる。手前・奥で少しサイズと位置に変化をつける
-    const layout = [
-      { i: 0, x: 40,  y: 132, s: 0.50 },  // モチグマ（左端）
-      { i: 1, x: 112, y: 138, s: 0.50 },  // ドカプリン（左中）
-      { i: 2, x: 192, y: 130, s: 0.54 },  // ネボスケ竜（右中）
-      { i: 3, x: 260, y: 140, s: 0.50 },  // オニギリガニ（右端）
-    ];
-    const placed = layout
-      .map((L) => {
-        // 怪物パーツはそのまま使い、外側の<g>で「配置→縮小→原点補正」をかける。
-        // パーツ内部の transform(translate(150,150)) はそのまま生かすので形が崩れない。
-        return `<g transform="translate(${L.x},${L.y}) scale(${L.s}) translate(-150,-150)">${MONSTERS[L.i].parts}</g>`;
-      })
-      .join("");
-    return namespaceSvgIds(
-      `<svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg"><defs>${MONSTER_DEFS}</defs>
-      <rect width="300" height="200" fill="url(#sky)"/>
-      <circle cx="150" cy="52" r="60" fill="url(#sun)"/><circle cx="150" cy="52" r="22" fill="#fff0b8" opacity="0.9"/>
-      <g fill="#e88a6a" opacity="0.45"><ellipse cx="60" cy="34" rx="28" ry="8"/><ellipse cx="234" cy="28" rx="24" ry="7"/></g>
-      <path d="M0 120 Q80 88 160 116 Q230 138 300 112 L300 200 L0 200 Z" fill="url(#hill)"/>
-      <path d="M0 150 Q150 134 300 154 L300 200 L0 200 Z" fill="url(#grass)"/>
-      ${placed}
-    </svg>`
-    );
-  }
-
-  // ---------- 換算ロジック（第2段階：SPEC.md 5.1 / 5.2） ----------
-  // ダメージ = 基準値 × 運動係数 × 量
-  const BASE_VALUE = 1; // 基準値（全体スケール調整用。当面は1固定）
-
-  /** 運動の定義。coef は「1単位あたりのダメージ」、unitSize は入力1単位が何個ぶんか。
-   *  例: プランクは「10秒 = 1単位」なので unitSize=10（秒入力を10で割って単位数にする）。*/
-  const EXERCISES = [
-    { id: "pushup",   name: "腕立て伏せ",     unit: "回", coef: 2,  unitSize: 1,  defaultAmount: 10 },
-    { id: "squat",    name: "スクワット",     unit: "回", coef: 2,  unitSize: 1,  defaultAmount: 15 },
-    { id: "jump",     name: "その場ジャンプ", unit: "秒", coef: 5,  unitSize: 10, defaultAmount: 30 },
-    { id: "plank",    name: "プランク",       unit: "秒", coef: 8,  unitSize: 10, defaultAmount: 30 },
-    { id: "walk",     name: "ウォーキング",   unit: "km", coef: 15, unitSize: 1,  defaultAmount: 2  },
-    { id: "run",      name: "ランニング",     unit: "km", coef: 40, unitSize: 1,  defaultAmount: 2  },
-  ];
-
-  const INITIAL_ATTACK = 20; // セーブ作成時の初期攻撃力の表示用（第3段階の装備ボーナスの土台）
-
-  /** 換算式でダメージを算出する。量は「入力値 ÷ unitSize」で単位数に直す。 */
-  function calcDamage(exercise, amount) {
-    const units = amount / exercise.unitSize;
-    return Math.round(BASE_VALUE * exercise.coef * units);
-  }
-
-  // Issue #6: 仮の運動メニューリスト（Aさんが用意する正式リストに差し替え予定）
-  const MENU_SUGGESTIONS = [
-    "腕立て伏せ 10回",
-    "スクワット 15回",
-    "腹筋 15回",
-    "その場ジャンプ 30秒",
-    "プランク 30秒",
-    "階段の昇り降り 2分",
-  ];
-
-  /** @typedef {{
-   *   playerName: string,
-   *   level: number,
-   *   attackPower: number,
-   *   defeatCount: number,
-   *   history: {date: string, label: string, damage: number}[],
-   *   monsterHp: number,
-   *   monsterMaxHp: number,
-   *   monsterName: string,
-   *   lastPlayedAt: string,
-   * }} SaveData
-   */
-
-  // ---------- セーブデータ共通処理（Issue #2） ----------
-  // 構造: { version: number, slots: (SaveData|null)[] }
-  //
-  // 端末ごとにセーブを分離する:
-  //   このブラウザ（端末）固有のID（dietGame_deviceId）を初回アクセス時に発行して
-  //   localStorageに保存し、それをセーブデータのキーに含める
-  //   （dietGame_saves_v2::<deviceId>）。
-  //   これにより、同じ index.html / 同じ配信元を複数の端末から開いても、
-  //   各端末は自分だけのセーブスロット一式を持つ。
-
-  function generateId() {
-    if (window.crypto && typeof window.crypto.randomUUID === "function") {
-      return window.crypto.randomUUID();
-    }
-    // 古いブラウザ向けの簡易フォールバック
-    return `dev-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  }
-
-  function getDeviceId() {
-    try {
-      let id = localStorage.getItem(DEVICE_ID_KEY);
-      if (!id) {
-        id = generateId();
-        localStorage.setItem(DEVICE_ID_KEY, id);
-      }
-      return id;
-    } catch (e) {
-      console.error("端末IDの発行に失敗しました", e);
-      return "unknown-device";
-    }
-  }
-
-  function getStorageKey() {
-    return `${STORAGE_KEY_BASE}::${getDeviceId()}`;
-  }
-
-  function initStorage() {
-    return { version: STORAGE_VERSION, slots: Array(SLOT_COUNT).fill(null) };
-  }
-
-  function normalizeStorage(parsed) {
-    if (!parsed || !Array.isArray(parsed.slots)) return null;
-    const slots = Array(SLOT_COUNT).fill(null);
-    for (let i = 0; i < SLOT_COUNT; i++) slots[i] = parsed.slots[i] || null;
-    return { version: parsed.version || STORAGE_VERSION, slots };
-  }
-
-  function loadStorage() {
-    try {
-      const raw = localStorage.getItem(getStorageKey());
-      if (raw) {
-        const normalized = normalizeStorage(JSON.parse(raw));
-        if (normalized) return normalized;
-      } else {
-        // 旧バージョン（端末IDなしの共通キー）からの引き継ぎ。
-        // この端末にまだ専用のセーブが無く、旧キーにデータが残っている場合のみ
-        // 1回だけ引き継ぐ（他端末には影響しない）。
-        const legacyRaw = localStorage.getItem(STORAGE_KEY_BASE);
-        if (legacyRaw) {
-          const migrated = normalizeStorage(JSON.parse(legacyRaw));
-          if (migrated) {
-            localStorage.setItem(getStorageKey(), JSON.stringify(migrated));
-            localStorage.removeItem(STORAGE_KEY_BASE);
-            return migrated;
-          }
-        }
-      }
-      return initStorage();
-    } catch (e) {
-      console.error("セーブデータの読み込みに失敗しました", e);
-      return initStorage();
-    }
-  }
-
-  function saveStorage() {
-    localStorage.setItem(getStorageKey(), JSON.stringify(storage));
-  }
-
-  function getSlot(index) {
-    return storage.slots[index];
-  }
-
-  function setSlot(index, data) {
-    storage.slots[index] = data;
-    saveStorage();
-  }
-
-  function newSaveData(playerName) {
+  async function makeSprite(parts) {
+    const b = measureParts(parts);
+    const pad = 12;
+    const vx = b.x - pad, vy = b.y - pad, vw = b.width + pad * 2, vh = b.height + pad * 2;
+    const w = Math.ceil(vw * SPRITE_H / vh), h = SPRITE_H;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="${vx} ${vy} ${vw} ${vh}"><defs>${MONSTER_DEFS}</defs>${parts}</svg>`;
+    const img = await loadImage("data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg));
+    const base = document.createElement("canvas");
+    base.width = w; base.height = h;
+    base.getContext("2d").drawImage(img, 0, 0, w, h);
     return {
-      playerName,
-      level: 1,
-      attackPower: INITIAL_ATTACK,
-      defeatCount: 0,
-      history: [],
-      monsterHp: BASE_MONSTER_HP,
-      monsterMaxHp: BASE_MONSTER_HP,
-      monsterName: MONSTERS[0].name,
-      items: {},
-      lastPlayedAt: nowString(),
+      img: base,
+      flash: tinted(base, "#ffffff"),
+      gold: tinted(base, "rgba(255,196,40,.55)"),
+      ratio: w / h,
+      url: base.toDataURL(),
     };
   }
 
-  function monsterForLevel(level) {
-    // 討伐ごとに次の怪物へ。levelではなく討伐回数で巡回させたいので
-    // 呼び出し側から通し番号を渡す（下位互換のためlevelでも動く）
-    const idx = (level - 1) % MONSTERS.length;
-    return MONSTERS[idx];
+  /* =========================================================
+   * 画面サイズと遠近（奥ほど小さく、手前ほど大きく）
+   * ========================================================= */
+  let W = 0, H = 0, DPR = 1;
+  let horizonY = 0, fenceY = 0, baseH = 0;
+  let bg = null;
+
+  function resize() {
+    const r = stage.getBoundingClientRect();
+    DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = r.width; H = r.height;
+    cv.width = Math.round(W * DPR);
+    cv.height = Math.round(H * DPR);
+    horizonY = H * 0.31;
+    fenceY = H * 0.83;
+    baseH = Math.min(W * 0.36, H * 0.21);
+    bg = drawBackground();
   }
 
-  // 討伐数から次に出す怪物を決める（倒すたびに変わる）
-  function monsterForDefeatCount(count) {
-    const idx = count % MONSTERS.length;
-    return MONSTERS[idx];
+  // z: 0=地平線 1=柵　xn: -1=左 1=右
+  function project(z, xn) {
+    const p = z * (0.55 + 0.45 * z);
+    const y = horizonY + (fenceY - horizonY) * p;
+    const spread = 0.2 + 0.8 * p;
+    return { x: W / 2 + xn * W * 0.42 * spread, y, s: 0.3 + 0.7 * p };
   }
 
-  function nowString() {
-    const d = new Date();
-    const pad = (n) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
+  function drawBackground() {
+    const c = document.createElement("canvas");
+    c.width = Math.round(W * DPR); c.height = Math.round(H * DPR);
+    const g = c.getContext("2d");
+    g.scale(DPR, DPR);
 
-  // ---------- アプリ状態 ----------
+    // 空
+    const sky = g.createLinearGradient(0, 0, 0, horizonY + 20);
+    sky.addColorStop(0, "#5a5b9e");
+    sky.addColorStop(0.55, "#c66b7a");
+    sky.addColorStop(1, "#f2a46e");
+    g.fillStyle = sky; g.fillRect(0, 0, W, horizonY + 30);
 
-  let storage = loadStorage();
-  let currentSlot = -1;
-  let pendingNewSlot = -1;
+    // 太陽
+    const sx = W / 2, sy = horizonY - H * 0.02;
+    const sun = g.createRadialGradient(sx, sy, 0, sx, sy, W * 0.38);
+    sun.addColorStop(0, "rgba(255,242,192,1)");
+    sun.addColorStop(0.35, "rgba(255,191,106,.55)");
+    sun.addColorStop(1, "rgba(255,191,106,0)");
+    g.fillStyle = sun; g.fillRect(0, 0, W, horizonY + 30);
+    g.fillStyle = "rgba(255,240,184,.95)";
+    g.beginPath(); g.arc(sx, sy, W * 0.09, 0, Math.PI * 2); g.fill();
 
-  // ---------- 画面切り替え ----------
-
-  function showScreen(id) {
-    document.querySelectorAll(".screen").forEach((el) => {
-      el.classList.toggle("active", el.id === id);
+    // 雲
+    g.fillStyle = "rgba(232,138,106,.45)";
+    [[0.2, 0.32, 0.12], [0.78, 0.22, 0.1], [0.55, 0.12, 0.07]].forEach(([x, y, r]) => {
+      g.beginPath(); g.ellipse(W * x, horizonY * y + 40, W * r, W * r * 0.28, 0, 0, Math.PI * 2); g.fill();
     });
-  }
 
-  // ---------- スロット選択画面（Issue #3） ----------
+    // 遠くの丘
+    const hill = g.createLinearGradient(0, horizonY - 40, 0, horizonY + 10);
+    hill.addColorStop(0, "#9c7a6a"); hill.addColorStop(1, "#6e5548");
+    g.fillStyle = hill;
+    g.beginPath();
+    g.moveTo(0, horizonY - 6);
+    g.quadraticCurveTo(W * 0.25, horizonY - 46, W * 0.52, horizonY - 14);
+    g.quadraticCurveTo(W * 0.78, horizonY + 6, W, horizonY - 26);
+    g.lineTo(W, horizonY + 10); g.lineTo(0, horizonY + 10); g.closePath(); g.fill();
 
-  function renderSlots() {
-    const list = document.getElementById("slot-list");
-    list.innerHTML = "";
-    storage.slots.forEach((save, i) => {
-      const card = document.createElement("div");
-      if (save) {
-        card.className = "slot-card";
-        card.innerHTML = `
-          <div class="slot-body">
-            <div class="slot-title">スロット${i + 1}：${escapeHtml(save.playerName)}</div>
-            <div class="slot-sub">Lv.${save.level}　討伐数 ${save.defeatCount}　攻撃力 ${save.attackPower}</div>
-            <div class="slot-sub">最終プレイ：${escapeHtml(save.lastPlayedAt || "-")}</div>
-          </div>
-          <button class="slot-delete" title="このデータを削除">🗑</button>
-        `;
-        card.querySelector(".slot-body").addEventListener("click", () => enterGame(i));
-        card.querySelector(".slot-delete").addEventListener("click", (e) => {
-          e.stopPropagation(); // カード本体のクリック（ゲーム開始）を止める
-          deleteSlot(i);
-        });
-      } else {
-        card.className = "slot-card empty";
-        card.innerHTML = `<div class="slot-title">スロット${i + 1}：空</div><div class="slot-sub">タップして新規作成</div>`;
-        card.addEventListener("click", () => startCreateSave(i));
-      }
-      list.appendChild(card);
-    });
-  }
+    // 草原
+    const grass = g.createLinearGradient(0, horizonY, 0, H);
+    grass.addColorStop(0, "#8a9a52"); grass.addColorStop(0.6, "#6c7d3c"); grass.addColorStop(1, "#4e5c30");
+    g.fillStyle = grass; g.fillRect(0, horizonY, W, H - horizonY);
 
-  function deleteSlot(index) {
-    const save = getSlot(index);
-    if (!save) return;
-    const ok = confirm(`スロット${index + 1}「${save.playerName}」のデータを削除しますか？\nこの操作は取り消せません。`);
-    if (!ok) return;
-    setSlot(index, null); // nullにして保存＝空スロットに戻す
-    renderSlots();
-  }
-
-  function escapeHtml(str) {
-    const div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
-  function startCreateSave(slotIndex) {
-    pendingNewSlot = slotIndex;
-    document.getElementById("new-player-name").value = "";
-    showScreen("screen-newplayer");
-    document.getElementById("new-player-name").focus();
-  }
-
-  function confirmCreateSave() {
-    const input = document.getElementById("new-player-name");
-    const name = input.value.trim() || "プレイヤー";
-    setSlot(pendingNewSlot, newSaveData(name));
-    enterGame(pendingNewSlot);
-  }
-
-  // ---------- ゲーム画面 ----------
-
-  function enterGame(slotIndex) {
-    currentSlot = slotIndex;
-    const save = getSlot(slotIndex);
-    save.lastPlayedAt = nowString();
-    saveStorage();
-    showScreen("screen-game");
-    document.getElementById("menu-suggest-result").textContent = "";
-    setupExerciseSelect();
-    renderGame();
-  }
-
-  function currentSave() {
-    return getSlot(currentSlot);
-  }
-
-  // 運動選択ドロップダウンを組み立てる（初回のみ）
-  function setupExerciseSelect() {
-    const select = document.getElementById("exercise-select");
-    if (select.options.length > 0) return; // 既に組み立て済みなら何もしない
-    EXERCISES.forEach((ex) => {
-      const opt = document.createElement("option");
-      opt.value = ex.id;
-      opt.textContent = ex.name;
-      select.appendChild(opt);
-    });
-    select.addEventListener("change", onExerciseChange);
-    onExerciseChange(); // 初期表示の単位・既定量をそろえる
-  }
-
-  // 選んだ運動に合わせて、単位表示と既定の量を切り替える
-  function onExerciseChange() {
-    const ex = selectedExercise();
-    document.getElementById("exercise-unit").textContent = ex.unit;
-    document.getElementById("exercise-amount").value = ex.defaultAmount;
-  }
-
-  function selectedExercise() {
-    const id = document.getElementById("exercise-select").value;
-    return EXERCISES.find((e) => e.id === id) || EXERCISES[0];
-  }
-
-  function renderGame() {
-    const save = currentSave();
-    document.getElementById("player-name").textContent = save.playerName;
-    document.getElementById("player-level").textContent = `Lv.${save.level}`;
-    document.getElementById("monster-name").textContent = save.monsterName;
-    renderMonsterSprite(save.monsterName);
-    document.getElementById("stat-attack").textContent = save.attackPower;
-    document.getElementById("stat-defeat").textContent = save.defeatCount;
-    document.getElementById("stat-records").textContent = save.history.length;
-    updateHpBar(save);
-    renderHistory(save);
-  }
-
-  function renderMonsterSprite(name) {
-    const monster = MONSTERS.find((m) => m.name === name) || MONSTERS[0];
-    document.getElementById("monster-sprite").innerHTML = buildMonsterSvg(monster);
-  }
-
-  function updateHpBar(save) {
-    const pct = Math.max(0, Math.min(100, (save.monsterHp / save.monsterMaxHp) * 100));
-    const fill = document.getElementById("hp-bar-fill");
-    fill.style.width = pct + "%";
-    document.getElementById("hp-text").textContent = `${Math.max(0, save.monsterHp)} / ${save.monsterMaxHp}`;
-  }
-
-  function renderHistory(save) {
-    const list = document.getElementById("history-list");
-    list.innerHTML = "";
-    if (save.history.length === 0) {
-      list.innerHTML = `<li class="history-empty">まだ記録がありません</li>`;
-      return;
+    // 奥行きのしま模様
+    for (let i = 0; i < 12; i += 2) {
+      const a = project(i / 12, 0).y, b = project((i + 1) / 12, 0).y;
+      g.fillStyle = "rgba(255,255,220,.05)";
+      g.fillRect(0, a, W, b - a);
     }
-    // 新しい記録を上に表示
-    [...save.history].reverse().forEach((h) => {
-      const li = document.createElement("li");
-      li.innerHTML = `
-        <div class="hist-main">
-          <span class="hist-label">${escapeHtml(h.label)}</span>
-          <span class="hist-damage">-${h.damage}</span>
-        </div>
-        <div class="hist-date">${escapeHtml(h.date)}</div>
-      `;
-      list.appendChild(li);
-    });
-  }
-
-  // ---------- 戦闘処理（Issue #4, #5） ----------
-
-  function recordExercise() {
-    const save = currentSave();
-    if (!save) return;
-
-    const ex = selectedExercise();
-    const amount = parseInt(document.getElementById("exercise-amount").value, 10);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      alert("運動量を1以上で入力してください");
-      return;
+    // 道（中央へ集まる線）
+    g.strokeStyle = "rgba(60,70,30,.18)"; g.lineWidth = 1;
+    for (let k = -1; k <= 1; k += 0.5) {
+      const far = project(0, k), near = project(1.2, k);
+      g.beginPath(); g.moveTo(far.x, far.y); g.lineTo(near.x, near.y); g.stroke();
     }
 
-    const btn = document.getElementById("btn-record");
-    btn.disabled = true;
-
-    const damage = calcDamage(ex, amount);
-    save.monsterHp = Math.max(0, save.monsterHp - damage);
-    save.history.push({
-      date: nowString(),
-      label: `${ex.name} ${amount}${ex.unit}`,
-      damage,
-    });
-    // Issue #4: 直近50件まで。51件目で最古を削除
-    while (save.history.length > HISTORY_LIMIT) {
-      save.history.shift();
+    // 草
+    g.strokeStyle = "rgba(61,73,31,.55)"; g.lineCap = "round";
+    for (let i = 0; i < 70; i++) {
+      const z = Math.random(), p = project(z, Math.random() * 2.2 - 1.1);
+      const h = 3 + 9 * p.s;
+      g.lineWidth = 1 + p.s;
+      g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x - h * 0.3, p.y - h); g.stroke();
+      g.beginPath(); g.moveTo(p.x + 2, p.y); g.lineTo(p.x + 2 + h * 0.2, p.y - h * 0.9); g.stroke();
     }
-    save.lastPlayedAt = nowString();
 
-    playHitAnimation(damage);
-    updateHpBar(save);
-    renderHistory(save);
-    document.getElementById("stat-records").textContent = save.history.length;
+    // 柵より手前（自分たちの拠点）
+    g.fillStyle = "#5b4a32";
+    g.fillRect(0, fenceY + 6, W, H - fenceY);
+    g.fillStyle = "rgba(0,0,0,.12)";
+    for (let x = 8; x < W; x += 34) { g.beginPath(); g.ellipse(x, fenceY + 40 + (x % 3) * 10, 14, 6, 0, 0, Math.PI * 2); g.fill(); }
 
-    if (save.monsterHp <= 0) {
-      setTimeout(() => defeatMonster(save, btn), 550);
+    // 柵
+    const postW = 10, gap = 30;
+    g.fillStyle = "#c08a52";
+    g.fillRect(0, fenceY - 26, W, 7);
+    g.fillRect(0, fenceY - 10, W, 7);
+    for (let x = 6; x < W; x += gap) {
+      g.fillStyle = "#a8743f";
+      g.beginPath();
+      g.moveTo(x, fenceY + 10); g.lineTo(x, fenceY - 34); g.lineTo(x + postW / 2, fenceY - 40); g.lineTo(x + postW, fenceY - 34); g.lineTo(x + postW, fenceY + 10);
+      g.closePath(); g.fill();
+      g.fillStyle = "rgba(255,255,255,.18)"; g.fillRect(x + 1, fenceY - 33, 2, 40);
+    }
+    g.fillStyle = "rgba(0,0,0,.18)"; g.fillRect(0, fenceY + 8, W, 4);
+    return c;
+  }
+
+  /* =========================================================
+   * ゲームの状態
+   * ========================================================= */
+  let mode = "loading";   // loading / title / play / paused / dying / over
+  let monsters = [], popups = [], particles = [];
+  let star = null;
+  let score = 0, lives = LIVES, kills = 0, combo = 0, maxCombo = 0, comboT = 0;
+  let fever = 0, nextFever = FEVER_COMBO;
+  let elapsed = 0, level = 1, spawnT = 0, starT = 0;
+  let shake = 0, hurtFlash = 0, slowmo = 0;
+  let ammo = AMMO_MAX, reloadT = 0;
+  let isNewBest = false;
+
+  function resetGame() {
+    monsters = []; popups = []; particles = []; star = null;
+    score = 0; lives = LIVES; kills = 0; combo = 0; maxCombo = 0; comboT = 0;
+    fever = 0; nextFever = FEVER_COMBO;
+    elapsed = 0; level = 1; spawnT = 0.6; starT = 12 + Math.random() * 6;
+    shake = 0; hurtFlash = 0; slowmo = 0; isNewBest = false;
+    ammo = AMMO_MAX; reloadT = 0;
+  }
+
+  // 時間がたつほど、いろんな怪物が・速く・たくさん来る
+  function pickType() {
+    const t = elapsed;
+    const weights = [
+      3,                         // モチグマ
+      4,                         // ドカプリン
+      t > 15 ? 2.5 : 0,          // ネボスケ竜
+      t > 6 ? 3 : 0,             // オニギリガニ
+    ];
+    let r = Math.random() * weights.reduce((a, b) => a + b, 0);
+    for (let i = 0; i < weights.length; i++) { if ((r -= weights[i]) < 0) return i; }
+    return 0;
+  }
+  function spawnMonster(demo) {
+    const typeIndex = demo ? Math.floor(Math.random() * TYPES.length) : pickType();
+    const type = TYPES[typeIndex];
+    const xn = Math.random() * 1.6 - 0.8;
+    monsters.push({
+      type, typeIndex, z: 0, xn, baseXn: xn, hp: type.hp,
+      t: Math.random() * 10, gold: !demo && elapsed > 8 && Math.random() < 0.05,
+      napping: false, napT: 0.8 + Math.random() * 0.8,
+      flashT: 0, kb: 0, dying: 0, demo: !!demo,
+    });
+  }
+  function speedFactor() { return 1 + (level - 1) * 0.13; }
+  function spawnInterval() {
+    const base = Math.max(0.36, 1.45 - elapsed * 0.016);
+    return fever > 0 ? base * 0.5 : base;
+  }
+
+  /* =========================================================
+   * 表示の更新
+   * ========================================================= */
+  const HEART = (on) => `<svg viewBox="0 0 24 24" class="${on ? "" : "off"}"><path d="M12 21s-7.5-4.6-9.6-9.2C.8 8.2 3 4.5 6.6 4.5c2.1 0 3.6 1.2 5.4 3.2 1.8-2 3.3-3.2 5.4-3.2 3.6 0 5.8 3.7 4.2 7.3C19.5 16.4 12 21 12 21z" fill="#ff5a4e" stroke="#fff" stroke-width="1.6"/></svg>`;
+  function updateHud() {
+    ui.score.textContent = score;
+    ui.hudBest.textContent = Math.max(best, score);
+    ui.lives.innerHTML = Array.from({ length: LIVES }, (_, i) => HEART(i < lives)).join("");
+  }
+  function updateAmmo() {
+    const free = fever > 0;
+    let html = "";
+    for (let i = 0; i < AMMO_MAX; i++) html += `<i class="${free || i < ammo ? "on" : ""}"></i>`;
+    ui.ammo.innerHTML = html + `<span>${free ? "うちほうだい！" : ammo === 0 ? "たまぎれ" : "たま"}</span>`;
+    ui.ammo.classList.toggle("empty", !free && ammo === 0);
+    ui.ammo.classList.toggle("free", free);
+  }
+  function useAmmo() {
+    if (fever > 0) return true;
+    if (ammo <= 0) return false;
+    ammo -= 1;
+    updateAmmo();
+    return true;
+  }
+  function comboMul() { return Math.min(4, 1 + Math.floor(combo / 5) * 0.5); }
+  function updateCombo() {
+    if (combo >= 3) {
+      const mul = comboMul() * (fever > 0 ? 2 : 1);
+      ui.combo.innerHTML = `<b>${combo}</b>コンボ<span class="mul">点数 ×${mul}</span>`;
+      ui.combo.classList.add("show");
     } else {
-      saveStorage();
-      setTimeout(() => (btn.disabled = false), 400);
+      ui.combo.classList.remove("show");
+    }
+    ui.combo.classList.toggle("fever", fever > 0);
+  }
+  function showBanner(text) {
+    ui.banner.textContent = text;
+    ui.banner.classList.remove("show");
+    void ui.banner.offsetWidth; // アニメーションを最初から
+    ui.banner.classList.add("show");
+  }
+  function popup(x, y, text, color = "#fff", size = 22) {
+    popups.push({ x, y, text, color, size, t: 0 });
+  }
+  function burst(x, y, color, n = 12, power = 1) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, sp = (80 + Math.random() * 220) * power;
+      particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 120, t: 0, life: 0.5 + Math.random() * 0.4, color, r: 2 + Math.random() * 4 });
     }
   }
+  function updateSoundBtn() { ui.sound.textContent = soundOn ? "音：オン" : "音：オフ"; }
 
-  function playHitAnimation(damage) {
-    const sprite = document.getElementById("monster-sprite");
-    sprite.classList.remove("hit");
-    void sprite.offsetWidth; // reflow でアニメーションを再トリガー
-    sprite.classList.add("hit");
-
-    const popup = document.getElementById("damage-popup");
-    popup.textContent = `-${damage}`;
-    popup.classList.remove("show");
-    void popup.offsetWidth;
-    popup.classList.add("show");
+  /* =========================================================
+   * たたく
+   * ========================================================= */
+  function monsterBox(m) {
+    const p = project(m.z, m.xn);
+    const h = baseH * p.s * m.type.size;
+    const w = h * sprites[m.type.art].ratio;
+    return { x: p.x, y: p.y, w, h, s: p.s };
   }
 
-  function defeatMonster(save, btn) {
-    // 今倒した怪物のおとしものを付与（次の怪物に切り替える前に取得する）
-    const defeated = MONSTERS.find((m) => m.name === save.monsterName) || MONSTERS[0];
-    if (!save.items) save.items = {}; // 古いセーブ互換
-    save.items[defeated.drop] = (save.items[defeated.drop] || 0) + 1;
+  function onTap(x, y) {
+    if (mode !== "play") return;
 
-    const banner = document.getElementById("defeat-banner");
-    banner.innerHTML = `退治！<br><span class="defeat-drop">${escapeHtml(defeated.drop)} を手に入れた！</span>`;
-    banner.classList.remove("show");
-    void banner.offsetWidth;
-    banner.classList.add("show");
-
-    // Issue #5: 討伐数+1 → level = floor(討伐数/3)+1 で再計算 → 次モンスターHP満タン
-    save.defeatCount += 1;
-    save.level = Math.floor(save.defeatCount / 3) + 1;
-    save.monsterMaxHp = BASE_MONSTER_HP + (save.level - 1) * MONSTER_HP_GROWTH;
-    save.monsterHp = save.monsterMaxHp;
-    save.monsterName = monsterForDefeatCount(save.defeatCount).name;
-
-    saveStorage();
-
-    setTimeout(() => {
-      banner.classList.remove("show");
-      renderGame();
-      btn.disabled = false;
-    }, 1400);
-  }
-
-  // ---------- もちもの画面（第3段階：おとしもの） ----------
-
-  function openItems() {
-    renderItems();
-    showScreen("screen-items");
-  }
-
-  function renderItems() {
-    const save = currentSave();
-    const list = document.getElementById("items-list");
-    list.innerHTML = "";
-    const items = save.items || {};
-    const names = Object.keys(items).filter((k) => items[k] > 0);
-    if (names.length === 0) {
-      list.innerHTML = `<li class="items-empty">まだ何も持っていません。<br>怪物を退治すると手に入ります。</li>`;
+    // 流れ星
+    if (star && Math.hypot(star.x - x, star.y - y) < 48) {
+      useStar();
       return;
     }
-    names.forEach((name) => {
-      const li = document.createElement("li");
-      li.className = "item-row";
-      li.innerHTML = `<span class="item-name">${escapeHtml(name)}</span><span class="item-count">×${items[name]}</span>`;
-      list.appendChild(li);
-    });
+
+    // 玉がないと撃てない
+    if (!useAmmo()) {
+      sfx.empty();
+      popup(x, y, "たまぎれ！", "#ffd0c8", 18);
+      ui.ammo.classList.remove("shake"); void ui.ammo.offsetWidth; ui.ammo.classList.add("shake");
+      return;
+    }
+
+    // 手前の怪物を優先
+    let target = null;
+    for (const m of monsters) {
+      if (m.dying) continue;
+      const b = monsterBox(m);
+      const w = Math.max(b.w * 1.2, 56), h = Math.max(b.h * 1.15, 56);
+      if (x > b.x - w / 2 && x < b.x + w / 2 && y > b.y - h && y < b.y + 10) {
+        if (!target || m.z > target.z) target = m;
+      }
+    }
+    if (target) hitMonster(target);
+    else missTap(x, y);
   }
 
-  // ---------- 運動メニュー提案（Issue #6） ----------
+  function hitMonster(m) {
+    const b = monsterBox(m);
+    const critical = m.type.move === "nap" && m.napping;
+    m.hp -= critical ? m.hp : 1;
+    m.flashT = 0.09;
+    m.kb = 0.5;
+    combo += 1;
+    comboT = COMBO_TIME;
+    maxCombo = Math.max(maxCombo, combo);
 
-  function suggestMenu() {
-    const idx = Math.floor(Math.random() * MENU_SUGGESTIONS.length);
-    document.getElementById("menu-suggest-result").textContent = `→ ${MENU_SUGGESTIONS[idx]}`;
+    if (m.hp <= 0) {
+      const mul = comboMul() * (fever > 0 ? 2 : 1) * (m.gold ? 5 : 1) * (critical ? 2 : 1);
+      const pts = Math.round(m.type.points * mul);
+      score += pts;
+      kills += 1;
+      m.dying = 0.001;
+      if (ammo < AMMO_MAX) { ammo += 1; updateAmmo(); }
+      sfx.kill(combo);
+      shake = Math.max(shake, 5);
+      burst(b.x, b.y - b.h * 0.5, m.gold ? "#ffd84a" : "#fff3c4", m.gold ? 26 : 14, b.s + 0.4);
+      popup(b.x, b.y - b.h, critical ? `会心！ +${pts}` : `+${pts}`, m.gold ? "#ffd84a" : "#fff", critical || m.gold ? 30 : 24);
+      if (m.gold && lives < LIVES) {
+        lives += 1;
+        sfx.life();
+        popup(b.x, b.y - b.h - 34, "ライフ +1", "#ff8a80", 22);
+      }
+    } else {
+      sfx.hit(combo);
+      burst(b.x, b.y - b.h * 0.5, "#ffffff", 6, b.s);
+    }
+
+    if (combo >= nextFever) {
+      fever = FEVER_TIME;
+      nextFever = combo + 25;
+      sfx.fever();
+      showBanner("フィーバー！");
+      updateAmmo();
+    }
+    updateHud();
+    updateCombo();
   }
 
-  // ---------- イベント登録 ----------
+  function missTap(x, y) {
+    sfx.miss();
+    if (combo >= 3) popup(x, y, "スカッ", "rgba(255,255,255,.85)", 18);
+    combo = 0;
+    updateCombo();
+  }
 
-  document.getElementById("btn-create-cancel").addEventListener("click", () => {
-    showScreen("screen-slots");
-  });
-  document.getElementById("btn-create-confirm").addEventListener("click", confirmCreateSave);
-  document.getElementById("new-player-name").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") confirmCreateSave();
-  });
-  document.getElementById("btn-back-slots").addEventListener("click", () => {
-    renderSlots();
-    showScreen("screen-slots");
-  });
-  document.getElementById("btn-record").addEventListener("click", recordExercise);
-  document.getElementById("btn-suggest-menu").addEventListener("click", suggestMenu);
-  document.getElementById("btn-open-items").addEventListener("click", openItems);
-  document.getElementById("btn-items-back").addEventListener("click", () => {
-    renderGame();
-    showScreen("screen-game");
-  });
-  document.getElementById("btn-start").addEventListener("click", () => {
-    renderSlots();
-    showScreen("screen-slots");
-  });
+  function useStar() {
+    sfx.star();
+    burst(star.x, star.y, "#fff7b0", 30, 1.3);
+    star = null;
+    shake = 10;
+    let got = 0;
+    for (const m of monsters) {
+      if (m.dying) continue;
+      const b = monsterBox(m);
+      const pts = Math.round(m.type.points * (fever > 0 ? 2 : 1) * (m.gold ? 5 : 1));
+      got += pts; kills += 1; m.dying = 0.001;
+      burst(b.x, b.y - b.h * 0.5, "#fff3c4", 10, b.s + 0.3);
+    }
+    score += got;
+    showBanner(got ? `ながれ星！ +${got}` : "ながれ星！");
+    updateHud();
+  }
 
-  // ---------- 起動 ----------
+  function monsterReached(m) {
+    m.dying = 0.001;
+    m.reached = true;
+    lives -= 1;
+    combo = 0;
+    shake = 16; hurtFlash = 0.5;
+    sfx.hurt();
+    updateHud(); updateCombo();
+    if (lives <= 0) {
+      mode = "dying";
+      slowmo = 1.2;
+    }
+  }
 
-  document.getElementById("start-visual").innerHTML = buildStartVisual();
-  renderSlots();
-  showScreen("screen-start");
+  /* =========================================================
+   * 毎フレームの動き
+   * ========================================================= */
+  function update(dt) {
+    const playing = mode === "play" || mode === "dying";
+    if (mode === "dying") {
+      slowmo -= dt;
+      dt *= 0.25;
+      if (slowmo <= 0) { gameOver(); return; }
+    }
+
+    if (mode === "play") {
+      elapsed += dt;
+      const newLevel = 1 + Math.floor(elapsed / LEVEL_SECONDS);
+      if (newLevel > level) { level = newLevel; sfx.level(); showBanner(`レベル ${level}`); }
+
+      spawnT -= dt;
+      if (spawnT <= 0) { spawnMonster(false); spawnT = spawnInterval(); }
+
+      if (comboT > 0) { comboT -= dt; if (comboT <= 0 && combo > 0) { combo = 0; updateCombo(); } }
+      if (fever > 0) { fever -= dt; if (fever <= 0) { updateCombo(); updateAmmo(); } }
+      if (ammo < AMMO_MAX) {
+        reloadT += dt;
+        if (reloadT >= RELOAD_SEC) { reloadT = 0; ammo += 1; updateAmmo(); }
+      } else reloadT = 0;
+
+      starT -= dt;
+      if (starT <= 0 && !star) {
+        const fromLeft = Math.random() < 0.5;
+        star = { x: fromLeft ? -30 : W + 30, y: H * (0.1 + Math.random() * 0.1), vx: (fromLeft ? 1 : -1) * W / 3.2, t: 0 };
+        starT = 16 + Math.random() * 10;
+      }
+    } else if (mode === "title") {
+      spawnT -= dt;
+      if (spawnT <= 0) { spawnMonster(true); spawnT = 1.4; }
+    }
+
+    if (star) {
+      star.t += dt;
+      star.x += star.vx * dt;
+      star.y += Math.sin(star.t * 3) * 0.4;
+      if (star.x < -60 || star.x > W + 60) star = null;
+    }
+
+    const sf = playing ? speedFactor() : 0.7;
+    for (const m of monsters) {
+      m.t += dt;
+      if (m.flashT > 0) m.flashT -= dt;
+      if (m.dying) { m.dying += dt; continue; }
+
+      let speed = m.type.speed * sf * (m.gold ? 1.25 : 1);
+      switch (m.type.move) {
+        case "wobble":
+          m.xn = m.baseXn + Math.sin(m.t * 3) * 0.08;
+          break;
+        case "zigzag":
+          m.xn = Math.max(-0.95, Math.min(0.95, m.baseXn + Math.sin(m.t * 2.3) * 0.38));
+          break;
+        case "nap":
+          m.napT -= dt;
+          if (m.napT <= 0) { m.napping = !m.napping; m.napT = m.napping ? 1.5 : 0.8 + Math.random() * 0.7; }
+          if (m.napping) speed = 0;
+          break;
+      }
+      // たたかれると少し押しもどされる
+      if (m.kb > 0) { m.z -= m.kb * 0.06 * dt * 10; m.kb = Math.max(0, m.kb - dt * 3); }
+      m.z = Math.max(0, m.z + speed * dt);
+
+      if (m.z >= 1) {
+        if (m.demo || mode !== "play") { m.dying = 0.001; m.reached = true; }
+        else monsterReached(m);
+      }
+    }
+    monsters = monsters.filter((m) => !(m.dying && m.dying > 0.4));
+
+    for (const p of particles) { p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 600 * dt; }
+    particles = particles.filter((p) => p.t < p.life);
+    for (const p of popups) p.t += dt;
+    popups = popups.filter((p) => p.t < 0.9);
+
+    if (shake > 0) shake = Math.max(0, shake - dt * 40);
+    if (hurtFlash > 0) hurtFlash -= dt;
+  }
+
+  /* =========================================================
+   * 描画
+   * ========================================================= */
+  function draw(time) {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.save();
+    if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+    ctx.drawImage(bg, 0, 0, W, H);
+
+    if (fever > 0) {
+      ctx.fillStyle = `rgba(255,200,60,${0.12 + Math.sin(time / 120) * 0.06})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    const sorted = monsters.slice().sort((a, b) => a.z - b.z);
+    for (const m of sorted) drawMonster(m, time);
+
+    if (star) drawStar(star, time);
+
+    for (const p of particles) {
+      ctx.globalAlpha = 1 - p.t / p.life;
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    ctx.textAlign = "center";
+    ctx.lineJoin = "round";
+    for (const p of popups) {
+      const k = p.t / 0.9;
+      ctx.globalAlpha = 1 - k * k;
+      ctx.font = `800 ${p.size * (k < 0.15 ? 0.7 + k * 2 : 1)}px "M PLUS Rounded 1c", sans-serif`;
+      ctx.lineWidth = 5; ctx.strokeStyle = "rgba(59,42,36,.85)";
+      ctx.strokeText(p.text, p.x, p.y - k * 40);
+      ctx.fillStyle = p.color;
+      ctx.fillText(p.text, p.x, p.y - k * 40);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    if (hurtFlash > 0) {
+      const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.2, W / 2, H / 2, H * 0.75);
+      g.addColorStop(0, "rgba(232,68,58,0)");
+      g.addColorStop(1, `rgba(232,68,58,${hurtFlash})`);
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  function drawMonster(m, time) {
+    const spr = sprites[m.type.art];
+    const b = monsterBox(m);
+    let { x, y, w, h } = b;
+    let alpha = Math.min(1, m.z * 8 + 0.15);
+    let rot = 0, sx = 1, sy = 1;
+
+    switch (m.type.move) {
+      case "bounce": y -= Math.abs(Math.sin(m.t * 6)) * h * 0.08; break;
+      case "wobble": sx = 1 + Math.sin(m.t * 12) * 0.05; sy = 1 - Math.sin(m.t * 12) * 0.05; break;
+      case "zigzag": rot = Math.sin(m.t * 9) * 0.06; break;
+      case "nap": if (m.napping) rot = -0.12; else y -= Math.abs(Math.sin(m.t * 10)) * h * 0.05; break;
+    }
+    if (m.dying) {
+      const k = m.dying / 0.4;
+      if (m.reached) { alpha *= 1 - k; }
+      else { alpha *= 1 - k; sx *= 1 + k * 0.5; sy *= 1 - k * 0.6; y -= k * h * 0.2; }
+    }
+
+    // 影
+    ctx.globalAlpha = alpha * 0.35;
+    ctx.fillStyle = "#2a3016";
+    ctx.beginPath(); ctx.ellipse(b.x, b.y, w * 0.38, h * 0.08, 0, 0, Math.PI * 2); ctx.fill();
+
+    ctx.globalAlpha = alpha;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+    ctx.scale(sx, sy);
+    if (m.gold) {
+      ctx.shadowColor = "rgba(255,210,60,.95)";
+      ctx.shadowBlur = 18 + Math.sin(time / 90) * 6;
+    }
+    const img = m.flashT > 0 || (m.dying && !m.reached) ? spr.flash : (m.gold ? spr.gold : spr.img);
+    ctx.drawImage(img, -w / 2, -h, w, h);
+    ctx.restore();
+    ctx.shadowBlur = 0;
+
+    // 残り体力（2回以上たたく怪物だけ）
+    if (m.type.hp > 1 && !m.dying && m.z > 0.08) {
+      const r = Math.max(3, 5 * b.s), gap = r * 2.8;
+      const total = m.type.hp, x0 = b.x - (total - 1) * gap / 2;
+      for (let i = 0; i < total; i++) {
+        ctx.fillStyle = i < m.hp ? "#ff5a4e" : "rgba(255,255,255,.4)";
+        ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(x0 + i * gap, b.y - h - r * 2.2, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
+    }
+    // 寝ているしるし
+    if (m.napping && !m.dying) {
+      ctx.font = `800 ${Math.max(12, 22 * b.s)}px "M PLUS Rounded 1c", sans-serif`;
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "left";
+      const bob = Math.sin(time / 200) * 4;
+      ctx.fillText("Zz", b.x + w * 0.25, b.y - h * 0.9 + bob);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawStar(s, time) {
+    // しっぽ
+    const dir = s.vx > 0 ? -1 : 1;
+    for (let i = 1; i <= 8; i++) {
+      ctx.globalAlpha = 0.5 - i * 0.055;
+      ctx.fillStyle = "#fff7b0";
+      ctx.beginPath(); ctx.arc(s.x + dir * i * 9, s.y + Math.sin(s.t * 3 - i * 0.3) * 2, 9 - i * 0.8, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.rotate(time / 300);
+    ctx.shadowColor = "rgba(255,240,150,1)"; ctx.shadowBlur = 20;
+    ctx.fillStyle = "#ffe14d"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const r = i % 2 ? 9 : 22, a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+      ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+    }
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.restore();
+    ctx.shadowBlur = 0;
+  }
+
+  /* =========================================================
+   * 画面の切りかえ
+   * ========================================================= */
+  function showTitle() {
+    mode = "title";
+    resetGame();
+    ui.hud.hidden = true;
+    ui.ammo.hidden = true;
+    ui.over.hidden = true;
+    ui.pause.hidden = true;
+    ui.start.hidden = false;
+    ui.startBest.textContent = best;
+    ui.combo.classList.remove("show");
+  }
+  function startGame() {
+    unlockAudio();
+    resetGame();
+    mode = "play";
+    ui.start.hidden = true;
+    ui.over.hidden = true;
+    ui.hud.hidden = false;
+    updateHud(); updateCombo(); updateAmmo();
+    ui.ammo.hidden = false;
+    showBanner("スタート！");
+  }
+  function gameOver() {
+    mode = "over";
+    isNewBest = score > best;
+    if (isNewBest) { best = score; save(BEST_KEY, best); }
+    sfx.over();
+    ui.final.textContent = score;
+    ui.record.hidden = !isNewBest;
+    ui.rank.textContent = "称号：" + RANKS.filter(([min]) => score >= min).pop()[1];
+    ui.stKills.textContent = kills;
+    ui.stCombo.textContent = maxCombo;
+    ui.stBest.textContent = best;
+    ui.combo.classList.remove("show");
+    ui.over.hidden = false;
+  }
+  function pauseGame() {
+    if (mode !== "play") return;
+    mode = "paused";
+    ui.pause.hidden = false;
+  }
+  function resumeGame() {
+    if (mode !== "paused") return;
+    unlockAudio();
+    ui.pause.hidden = true;
+    mode = "play";
+  }
+
+  /* =========================================================
+   * 操作
+   * ========================================================= */
+  stage.addEventListener("pointerdown", (e) => {
+    if (e.target !== cv) return;
+    e.preventDefault();
+    const r = cv.getBoundingClientRect();
+    onTap(e.clientX - r.left, e.clientY - r.top);
+  });
+  $("btn-start").addEventListener("click", startGame);
+  $("btn-retry").addEventListener("click", startGame);
+  $("btn-title").addEventListener("click", showTitle);
+  $("btn-pause").addEventListener("click", pauseGame);
+  $("btn-resume").addEventListener("click", resumeGame);
+  $("btn-quit").addEventListener("click", showTitle);
+  ui.sound.addEventListener("click", () => {
+    soundOn = !soundOn;
+    save(SOUND_KEY, soundOn);
+    updateSoundBtn();
+    if (soundOn) { unlockAudio(); sfx.hit(5); }
+  });
+  document.addEventListener("visibilitychange", () => { if (document.hidden) pauseGame(); });
+  window.addEventListener("resize", resize);
+
+  /* =========================================================
+   * はじめに
+   * ========================================================= */
+  let last = 0;
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000 || 0);
+    last = now;
+    if (mode !== "paused" && mode !== "over") update(dt);
+    draw(now);
+    requestAnimationFrame(loop);
+  }
+
+  async function init() {
+    resize();
+    updateSoundBtn();
+    for (const m of MONSTERS) sprites.push(await makeSprite(m.parts));
+    ui.howto.innerHTML = TYPES.map((t) =>
+      `<li><img src="${sprites[t.art].url}" alt=""><span><b>${MONSTERS[t.art].name}</b><small>${t.tip}</small></span></li>`
+    ).join("");
+    const startBtn = $("btn-start");
+    startBtn.disabled = false;
+    startBtn.textContent = "スタート";
+    showTitle();
+    requestAnimationFrame((t) => { last = t; loop(t); });
+  }
+  init();
 })();
