@@ -22,8 +22,8 @@
   const FEVER_TIME = 7;             // フィーバーの秒数
   const LEVEL_SECONDS = 25;         // この秒数ごとにレベルアップ（速くなる）
   const APPEAR_Z = 0.13;            // 出てきた直後（これより奥）はたたけない
-  const AMMO_MAX = 10;              // 玉の最大数
-  const RELOAD_SEC = 0.45;          // 玉が1発もどるまでの秒数
+  const AMMO_MAX = 6;               // 玉の最大数
+  const RELOAD_SEC = 0.7;           // 玉が1発もどるまでの秒数
   const BEST_KEY = "stst_oshiyose_best_v1";
   const SOUND_KEY = "stst_oshiyose_sound_v1";
 
@@ -31,7 +31,7 @@
   const TYPES = [
     { art: 0, hp: 2, speed: 0.075, points: 20, size: 1.0,  move: "bounce", tip: "2回たたく" },
     { art: 1, hp: 1, speed: 0.125, points: 10, size: 0.86, move: "wobble", tip: "足がはやい" },
-    { art: 2, hp: 3, speed: 0.17,  points: 30, size: 1.06, move: "nap",    tip: "寝てる時は一撃！" },
+    { art: 2, hp: 3, speed: 0.17,  points: 30, size: 1.06, move: "nap",    tip: "寝てる間なら一撃！" },
     { art: 3, hp: 1, speed: 0.09,  points: 15, size: 0.86, move: "zigzag", tip: "横にうろうろ" },
   ];
 
@@ -305,7 +305,7 @@
     monsters = []; popups = []; particles = []; star = null;
     score = 0; lives = LIVES; kills = 0; combo = 0; maxCombo = 0; comboT = 0;
     fever = 0; nextFever = FEVER_COMBO;
-    elapsed = 0; level = 1; spawnT = 0.6; starT = 12 + Math.random() * 6;
+    elapsed = 0; level = 1; spawnT = 0.6; starT = 25 + Math.random() * 10;
     shake = 0; hurtFlash = 0; slowmo = 0; isNewBest = false;
     ammo = AMMO_MAX; reloadT = 0; overReason = "";
   }
@@ -355,7 +355,7 @@
     for (let i = 0; i < AMMO_MAX; i++) html += `<i class="${free || i < ammo ? "on" : ""}"></i>`;
     ui.ammo.innerHTML = html + `<span>${free ? "うちほうだい！" : ammo === 0 ? "たまぎれ" : "たま"}</span>`;
     ui.ammo.classList.toggle("empty", !free && ammo === 0);
-    ui.ammo.classList.toggle("low", !free && ammo > 0 && ammo <= 3);
+    ui.ammo.classList.toggle("low", !free && ammo > 0 && ammo <= 2);
     ui.ammo.classList.toggle("free", free);
   }
   function useAmmo() {
@@ -414,6 +414,23 @@
       return;
     }
 
+    const inBox = (m, minSize) => {
+      const b = monsterBox(m);
+      const w = Math.max(b.w * 1.15, minSize), h = Math.max(b.h * 1.1, minSize);
+      return x > b.x - w / 2 && x < b.x + w / 2 && y > b.y - h && y < b.y + 10;
+    };
+
+    // 手前の怪物を優先
+    let target = null;
+    for (const m of monsters) {
+      if (m.dying || m.z < APPEAR_Z) continue;   // 出てきたばかりの怪物はまだたたけない
+      if (inBox(m, 40) && (!target || m.z > target.z)) target = m;
+    }
+
+    // 倒したばかりの怪物の上をたたいた分は、空振りにしない（連打の2発目以降）
+    // 玉も減らないし、コンボも切れない
+    if (!target && monsters.some((m) => m.dying && !m.reached && m.dying < 0.4 && inBox(m, 44))) return;
+
     // 玉がないと撃てない
     if (!useAmmo()) {
       sfx.empty();
@@ -422,16 +439,6 @@
       return;
     }
 
-    // 手前の怪物を優先
-    let target = null;
-    for (const m of monsters) {
-      if (m.dying || m.z < APPEAR_Z) continue;   // 出てきたばかりの怪物はまだたたけない
-      const b = monsterBox(m);
-      const w = Math.max(b.w * 1.15, 40), h = Math.max(b.h * 1.1, 40);
-      if (x > b.x - w / 2 && x < b.x + w / 2 && y > b.y - h && y < b.y + 10) {
-        if (!target || m.z > target.z) target = m;
-      }
-    }
     if (target) hitMonster(target);
     else missTap(x, y);
 
@@ -459,7 +466,7 @@
       sfx.kill(combo);
       shake = Math.max(shake, 5);
       burst(b.x, b.y - b.h * 0.5, m.gold ? "#ffd84a" : "#fff3c4", m.gold ? 26 : 14, b.s + 0.4);
-      popup(b.x, b.y - b.h, critical ? `会心！ +${pts}` : `+${pts}`, m.gold ? "#ffd84a" : "#fff", critical || m.gold ? 30 : 24);
+      popup(b.x, b.y - b.h, critical ? `寝こみ一撃！ +${pts}` : `+${pts}`, m.gold ? "#ffd84a" : "#fff", critical || m.gold ? 30 : 24);
       if (m.gold && lives < LIVES) {
         lives += 1;
         sfx.life();
@@ -493,13 +500,17 @@
     burst(star.x, star.y, "#fff7b0", 30, 1.3);
     star = null;
     shake = 10;
+    // 画面の怪物ぜんぶに1ダメージ（1回でたおせる怪物だけ消える）
     let got = 0;
     for (const m of monsters) {
-      if (m.dying) continue;
+      if (m.dying || m.z < APPEAR_Z) continue;
       const b = monsterBox(m);
-      const pts = Math.round(m.type.points * (fever > 0 ? 2 : 1) * (m.gold ? 5 : 1));
-      got += pts; kills += 1; m.dying = 0.001;
-      burst(b.x, b.y - b.h * 0.5, "#fff3c4", 10, b.s + 0.3);
+      m.hp -= 1; m.flashT = 0.12; m.kb = 0.5;
+      burst(b.x, b.y - b.h * 0.5, "#fff3c4", 8, b.s + 0.3);
+      if (m.hp <= 0) {
+        got += Math.round(m.type.points * (fever > 0 ? 2 : 1) * (m.gold ? 5 : 1));
+        kills += 1; m.dying = 0.001;
+      }
     }
     score += got;
     showBanner(got ? `ながれ星！ +${got}` : "ながれ星！");
@@ -562,8 +573,8 @@
       starT -= dt;
       if (starT <= 0 && !star) {
         const fromLeft = Math.random() < 0.5;
-        star = { x: fromLeft ? -30 : W + 30, y: H * (0.1 + Math.random() * 0.1), vx: (fromLeft ? 1 : -1) * W / 3.2, t: 0 };
-        starT = 16 + Math.random() * 10;
+        star = { x: fromLeft ? -30 : W + 30, y: H * (0.1 + Math.random() * 0.1), vx: (fromLeft ? 1 : -1) * W / 2.2, t: 0 };
+        starT = 30 + Math.random() * 15;
       }
     } else if (mode === "title") {
       spawnT -= dt;
@@ -721,6 +732,22 @@
       ctx.textAlign = "left";
       const bob = Math.sin(time / 200) * 4;
       ctx.fillText("Zz", b.x + w * 0.25, b.y - h * 0.9 + bob);
+      // 「今なら一撃」がわかるように、頭の上にふきだし
+      if (m.z >= APPEAR_Z) {
+        const fs = Math.max(11, 15 * b.s + 3);
+        ctx.font = `800 ${fs}px "M PLUS Rounded 1c", sans-serif`;
+        ctx.textAlign = "center";
+        const label = "ねてる！一撃チャンス";
+        const tw = ctx.measureText(label).width + 14, th = fs + 10;
+        const bx = b.x, by = b.y - h - th - 8 - Math.max(3, 5 * b.s) * 3;
+        const blink = 0.75 + Math.sin(time / 110) * 0.25;
+        ctx.globalAlpha = blink;
+        ctx.fillStyle = "#ffc93c";
+        ctx.beginPath(); ctx.roundRect(bx - tw / 2, by, tw, th, th / 2); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(bx - 5, by + th); ctx.lineTo(bx + 5, by + th); ctx.lineTo(bx, by + th + 6); ctx.fill();
+        ctx.fillStyle = "#3b2a24";
+        ctx.fillText(label, bx, by + th / 2 + fs * 0.36);
+      }
     }
     ctx.globalAlpha = 1;
   }
