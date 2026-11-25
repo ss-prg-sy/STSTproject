@@ -21,6 +21,7 @@
   const FEVER_COMBO = 20;           // このコンボ数でフィーバー
   const FEVER_TIME = 7;             // フィーバーの秒数
   const LEVEL_SECONDS = 25;         // この秒数ごとにレベルアップ（速くなる）
+  const APPEAR_Z = 0.13;            // 出てきた直後（これより奥）はたたけない
   const AMMO_MAX = 10;              // 玉の最大数
   const RELOAD_SEC = 0.45;          // 玉が1発もどるまでの秒数
   const BEST_KEY = "stst_oshiyose_best_v1";
@@ -57,6 +58,7 @@
     start: $("start"), startBest: $("start-best"), howto: $("howto"), sound: $("btn-sound"),
     pause: $("pause"), over: $("over"),
     final: $("final"), record: $("record"), rank: $("rank"),
+    overReason: $("over-reason"),
     stKills: $("st-kills"), stCombo: $("st-combo"), stBest: $("st-best"),
   };
 
@@ -108,6 +110,11 @@
     life:  () => [784, 1047].forEach((f, i) => tone(f, 0.14, "sine", 0.12, 1, i * 0.08)),
     over:  () => [523, 440, 349, 262].forEach((f, i) => tone(f, 0.22, "triangle", 0.1, 0.97, i * 0.16)),
   };
+
+  // スマホをブルッとふるわせる（対応している機種だけ）
+  function vibrate(pattern) {
+    if (soundOn && navigator.vibrate) { try { navigator.vibrate(pattern); } catch (e) {} }
+  }
 
   /* =========================================================
    * 怪物の絵を、ゲームで使う画像に変換しておく
@@ -187,8 +194,8 @@
   function project(z, xn) {
     const p = z * (0.55 + 0.45 * z);
     const y = horizonY + (fenceY - horizonY) * p;
-    const spread = 0.2 + 0.8 * p;
-    return { x: W / 2 + xn * W * 0.42 * spread, y, s: 0.3 + 0.7 * p };
+    const spread = 0.72 + 0.28 * p;   // 奥でも横に広がるように
+    return { x: W / 2 + xn * W * 0.44 * spread, y, s: 0.3 + 0.7 * p };
   }
 
   function drawBackground() {
@@ -292,6 +299,7 @@
   let shake = 0, hurtFlash = 0, slowmo = 0;
   let ammo = AMMO_MAX, reloadT = 0;
   let isNewBest = false;
+  let overReason = "";
 
   function resetGame() {
     monsters = []; popups = []; particles = []; star = null;
@@ -299,7 +307,7 @@
     fever = 0; nextFever = FEVER_COMBO;
     elapsed = 0; level = 1; spawnT = 0.6; starT = 12 + Math.random() * 6;
     shake = 0; hurtFlash = 0; slowmo = 0; isNewBest = false;
-    ammo = AMMO_MAX; reloadT = 0;
+    ammo = AMMO_MAX; reloadT = 0; overReason = "";
   }
 
   // 時間がたつほど、いろんな怪物が・速く・たくさん来る
@@ -318,7 +326,7 @@
   function spawnMonster(demo) {
     const typeIndex = demo ? Math.floor(Math.random() * TYPES.length) : pickType();
     const type = TYPES[typeIndex];
-    const xn = Math.random() * 1.6 - 0.8;
+    const xn = Math.random() * 1.9 - 0.95;
     monsters.push({
       type, typeIndex, z: 0, xn, baseXn: xn, hp: type.hp,
       t: Math.random() * 10, gold: !demo && elapsed > 8 && Math.random() < 0.05,
@@ -347,6 +355,7 @@
     for (let i = 0; i < AMMO_MAX; i++) html += `<i class="${free || i < ammo ? "on" : ""}"></i>`;
     ui.ammo.innerHTML = html + `<span>${free ? "うちほうだい！" : ammo === 0 ? "たまぎれ" : "たま"}</span>`;
     ui.ammo.classList.toggle("empty", !free && ammo === 0);
+    ui.ammo.classList.toggle("low", !free && ammo > 0 && ammo <= 3);
     ui.ammo.classList.toggle("free", free);
   }
   function useAmmo() {
@@ -360,7 +369,9 @@
   function updateCombo() {
     if (combo >= 3) {
       const mul = comboMul() * (fever > 0 ? 2 : 1);
-      ui.combo.innerHTML = `<b>${combo}</b>コンボ<span class="mul">点数 ×${mul}</span>`;
+      const left = nextFever - combo;
+      const hint = fever > 0 ? "フィーバー中！ うちほうだい" : `点数 ×${mul}　フィーバーまであと${left}`;
+      ui.combo.innerHTML = `<b>${combo}</b>コンボ<span class="mul">${hint}</span>`;
       ui.combo.classList.add("show");
     } else {
       ui.combo.classList.remove("show");
@@ -414,15 +425,18 @@
     // 手前の怪物を優先
     let target = null;
     for (const m of monsters) {
-      if (m.dying) continue;
+      if (m.dying || m.z < APPEAR_Z) continue;   // 出てきたばかりの怪物はまだたたけない
       const b = monsterBox(m);
-      const w = Math.max(b.w * 1.2, 56), h = Math.max(b.h * 1.15, 56);
+      const w = Math.max(b.w * 1.15, 40), h = Math.max(b.h * 1.1, 40);
       if (x > b.x - w / 2 && x < b.x + w / 2 && y > b.y - h && y < b.y + 10) {
         if (!target || m.z > target.z) target = m;
       }
     }
     if (target) hitMonster(target);
     else missTap(x, y);
+
+    // 玉を使い切ったらゲームオーバー（最後の1発でたおせば、1発もどるのでセーフ）
+    if (mode === "play" && fever <= 0 && ammo === 0) outOfAmmo();
   }
 
   function hitMonster(m) {
@@ -492,15 +506,28 @@
     updateHud();
   }
 
+  function outOfAmmo() {
+    overReason = "たまぎれ…";
+    showBanner("たまぎれ！");
+    sfx.hurt();
+    vibrate([80, 60, 200]);
+    shake = 14; hurtFlash = 0.5;
+    combo = 0; updateCombo();
+    mode = "dying";
+    slowmo = 1.2;
+  }
+
   function monsterReached(m) {
     m.dying = 0.001;
     m.reached = true;
     lives -= 1;
     combo = 0;
     shake = 16; hurtFlash = 0.5;
+    vibrate(lives <= 0 ? [80, 60, 200] : 120);
     sfx.hurt();
     updateHud(); updateCombo();
     if (lives <= 0) {
+      overReason = "柵を突破された…";
       mode = "dying";
       slowmo = 1.2;
     }
@@ -642,7 +669,8 @@
     const spr = sprites[m.type.art];
     const b = monsterBox(m);
     let { x, y, w, h } = b;
-    let alpha = Math.min(1, m.z * 8 + 0.15);
+    // 出てきたばかりは うっすら（まだたたけない）
+    let alpha = m.z < APPEAR_Z ? 0.2 + (m.z / APPEAR_Z) * 0.35 : 1;
     let rot = 0, sx = 1, sy = 1;
 
     switch (m.type.move) {
@@ -751,6 +779,7 @@
     isNewBest = score > best;
     if (isNewBest) { best = score; save(BEST_KEY, best); }
     sfx.over();
+    ui.overReason.textContent = "ゲームオーバー：" + overReason;
     ui.final.textContent = score;
     ui.record.hidden = !isNewBest;
     ui.rank.textContent = "称号：" + RANKS.filter(([min]) => score >= min).pop()[1];
@@ -793,6 +822,8 @@
     updateSoundBtn();
     if (soundOn) { unlockAudio(); sfx.hit(5); }
   });
+  document.addEventListener("contextmenu", (e) => e.preventDefault());
+  document.addEventListener("dblclick", (e) => e.preventDefault());
   document.addEventListener("visibilitychange", () => { if (document.hidden) pauseGame(); });
   window.addEventListener("resize", resize);
 

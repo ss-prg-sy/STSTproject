@@ -2,7 +2,11 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="かいぶつ">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>おしよせ！かいぶつ</title>
 <meta name="description" content="おしよせる怪物をタップで追いかえせ！1回1分、つい「もう1回」になるタップゲーム。">
 <meta name="theme-color" content="#5a5b9e">
@@ -36,6 +40,7 @@
     <h1 class="title">おしよせ！<br><span>かいぶつ</span></h1>
     <p class="best-line">ベスト <b id="start-best">0</b></p>
     <ul class="howto" id="howto"></ul>
+    <p class="rule">玉は10発。<b>玉ぎれ</b>か<b>柵を突破</b>されたら負け！</p>
     <button class="btn-big" id="btn-start" disabled>じゅんび中…</button>
     <button class="sound-btn" id="btn-sound"></button>
   </section>
@@ -49,7 +54,7 @@
 
   <!-- ゲームオーバー -->
   <section id="over" class="panel over" hidden>
-    <p class="kicker">ゲームオーバー</p>
+    <p class="kicker" id="over-reason">ゲームオーバー</p>
     <div class="final" id="final">0</div>
     <p class="record" id="record" hidden>ベスト更新！</p>
     <p class="rank" id="rank"></p>
